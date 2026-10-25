@@ -24,7 +24,7 @@
 - The three-tier exactness model (DESIGN.md): CPU exact; RSP HLE exact at its outputs against a low-level RSP; RDP on
   the PICA judged visually against a software RDP.
 - Downloading the hardware-derived test ROMs (n64-systemtest, PeterLemon/N64).
-- The GitHub repository (Tkibbs14/ultra3ds, private), when the local history is ready to push.
+- Visibility of github.com/Tkibbs14/ultra3ds: created private on 2026-10-25 (gc3ds is public).
 
 ## Log
 
