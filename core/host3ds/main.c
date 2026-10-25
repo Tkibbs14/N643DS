@@ -24,6 +24,9 @@
 #define PERF_PATH "sdmc:/n643ds/perf.csv"
 #define RELAY_PENDING "sdmc:/n643ds/relay_pending.txt"
 
+// The default 3dsx stack is 32 KB; the core keeps large buffers static, this is headroom.
+u32 __stacksize__ = 256 * 1024;
+
 static PrintConsole g_con;
 static FILE* g_log;          // perf.csv, teed into the relay job when one runs
 static bool g_quitApp;

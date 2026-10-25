@@ -55,7 +55,7 @@ void cart_write32(u32 pa, u32 v, u32 mask) {
         off &= 0xFFFC;
         m_w32(g_mem.isv, off, (m_r32(g_mem.isv, off) & ~mask) | (v & mask));
         if (off == 0x14 && v) {  // the length register: print the bytes at 0x20
-            char buf[0x10000];
+            static char buf[0x10000];  // static: the 3DS host's stack is small (a 64 KB local overflowed it)
             u32 n = v < 0xFFE0 ? v : 0xFFE0;
             for (u32 i = 0; i < n; i++) buf[i] = (char)m_r8(g_mem.isv, 0x20 + i);
             if (g_onIsv) g_onIsv(buf, n);
