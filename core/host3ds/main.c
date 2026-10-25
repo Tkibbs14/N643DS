@@ -285,6 +285,7 @@ static bool relaunch_into(const char* path) {
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
     Thread t = threadCreate(relaunch_thread, NULL, 8 * 1024, prio, 1, true);
+    if (!t) t = threadCreate(relaunch_thread, NULL, 8 * 1024, prio, 0, true);
     if (!t) return false;
     u64 limit = svcGetSystemTick() + 3ull * SYSCLOCK_ARM11;
     while (!g_relaunchDone && svcGetSystemTick() < limit) svcSleepThread(10000000LL);
@@ -493,6 +494,7 @@ static void menu(const char* selfPath) {
 int main(int argc, char** argv) {
     const char* selfPath = argc > 0 && argv[0] && !strncmp(argv[0], "sdmc:/", 6) ? argv[0] : "sdmc:/3ds/n643ds.3dsx";
     osSetSpeedupEnable(true);
+    APT_SetAppCpuTimeLimit(80);  // core 1 for the relay and restart threads (without it they cannot be created there)
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     gfxSetDoubleBuffering(GFX_TOP, false);

@@ -183,6 +183,36 @@ static bool to_int(Vr* c, double x, int mode, bool is64, u64* out) {
     return true;
 }
 
+// ---- Conversions from integers ------------------------------------------------------------------------------------
+// Rounded here in the guest's mode rather than by the host: on the 3DS, (float)int64 goes through a library routine
+// that ignores the rounding mode (the 2DS's cvt.s.l results differed from qemu's, relay job 1437).
+static u64 int_to_fp(Vr* c, s64 v, bool dbl) {
+    int mant = dbl ? 52 : 23, bias = dbl ? 1023 : 127, top = dbl ? 63 : 31;
+    u64 sign = v < 0, u = sign ? (u64)0 - (u64)v : (u64)v;
+    if (!u) return 0;
+    int msb = 63;
+    while (!(u >> msb)) msb--;
+    int exp = msb;
+    u64 m;
+    if (msb <= mant) {
+        m = u << (mant - msb);
+    } else {
+        int sh = msb - mant;
+        m = u >> sh;
+        u64 rem = u & ((1ull << sh) - 1), half = 1ull << (sh - 1);
+        bool up = false;
+        switch (c->fcr31 & 3) {
+        case 0: up = rem > half || (rem == half && (m & 1)); break;
+        case 1: break;
+        case 2: up = !sign && rem; break;
+        default: up = sign && rem; break;
+        }
+        if (rem) raise_cause(c, F_I);
+        if (up && ++m == (2ull << mant)) { m >>= 1; exp++; }
+    }
+    return (sign << top) | ((u64)(exp + bias) << mant) | (m & ((1ull << mant) - 1));
+}
+
 // ---- COP1 ---------------------------------------------------------------------------------------------------------
 static void arith_s(Vr* c, u32 op, int fn) {
     u32 a = (u32)vr_fpr_read_w(c, FS_), b = (u32)vr_fpr_read_w(c, FT_);
@@ -275,31 +305,31 @@ static void convert(Vr* c, u32 op, int fmt, int fn) {
         break;
     case 0x20: {  // CVT.S
         if (fmt == FMT_S) { raise_cause(c, F_E); ok = false; break; }
-        volatile float r;
-        if (fmt == FMT_D) r = (float)x;
-        else if (fmt == FMT_W) r = (float)(s32)(u32)src;
-        else {
+        u32 v;
+        if (fmt == FMT_D) {
+            volatile float r = (float)x;
+            v = f2u(r);
+        } else {
             // CVT from a 64-bit integer outside +-2^55 is unimplemented on the VR4300 (ares).
-            s64 i = (s64)src;
+            s64 i = fmt == FMT_W ? (s64)(s32)(u32)src : (s64)src;
             if (i >= (1ll << 55) || i < -(1ll << 55)) { raise_cause(c, F_E); ok = false; break; }
-            r = (float)i;
+            v = (u32)int_to_fp(c, i, false);
         }
-        u32 v = f2u(r);
         ok = out_s(c, &v);
         out = v;
         break;
     }
     case 0x21: {  // CVT.D
         if (fmt == FMT_D) { raise_cause(c, F_E); ok = false; break; }
-        volatile double r;
-        if (fmt == FMT_S) r = x;
-        else if (fmt == FMT_W) r = (double)(s32)(u32)src;
-        else {
-            s64 i = (s64)src;
+        u64 v;
+        if (fmt == FMT_S) {
+            volatile double r = x;
+            v = d2u(r);
+        } else {
+            s64 i = fmt == FMT_W ? (s64)(s32)(u32)src : (s64)src;
             if (i >= (1ll << 55) || i < -(1ll << 55)) { raise_cause(c, F_E); ok = false; break; }
-            r = (double)i;
+            v = int_to_fp(c, i, true);
         }
-        u64 v = d2u(r);
         ok = out_d(c, &v);
         out = v;
         outD = true;
