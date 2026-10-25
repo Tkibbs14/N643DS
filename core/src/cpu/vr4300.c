@@ -99,10 +99,14 @@ void vr_exception(Vr* c, int code, int ce) { exception_at(c, code, ce, 0x180); }
 void vr_exception_vec(Vr* c, int code, u32 vecOff);
 void vr_exception_vec(Vr* c, int code, u32 vecOff) { exception_at(c, code, 0, vecOff); }
 
-static void address_error(Vr* c, u64 va, bool write) {
+// Address errors also write Context's BadVPN2 (hardware: PeterLemon/N64 Exceptions/Unaligned shows 0x00400000 after a
+// fault at 0x80000001). XContext is not confirmed and is left alone.
+void vr_address_error(Vr* c, u64 va, bool write) {
     c->cop0[C0_BADVADDR] = va;
+    c->cop0[C0_CONTEXT] = (c->cop0[C0_CONTEXT] & ~0x7FFFF0ull) | (((va >> 13) & 0x7FFFF) << 4);
     vr_exception(c, write ? EXC_ADES : EXC_ADEL, 0);
 }
+#define address_error vr_address_error
 
 // ---- Memory access ------------------------------------------------------------------------------------------------
 static inline bool xlat(Vr* c, u64 va, bool write, u32* pa) {
@@ -744,9 +748,13 @@ void vr_reset(Vr* c) {
     c->cop0[C0_STATUS] = 0x34000000;   // CU0, CU1, FR (the state IPL3 leaves; rom.c sets it for the boot path)
     c->cop0[C0_CONFIG] = 0x7006E463;
     c->cop0[C0_PRID] = 0x00000B22;
-    c->cop0[C0_COMPARE] = 0xFFFFFFFF;
+    c->cop0[C0_COMPARE] = 0;  // as after IPL3 on hardware (PeterLemon/N64 CP0/COP0Register)
     c->cop0[C0_RANDOM] = 0;
     c->fcr31 = 0;
+    // Power-on TLB contents are random, so nothing matches; all-zero entries would match low addresses as "invalid"
+    // (a refill on hardware: PeterLemon/N64 Exceptions/TLB). Park them in kseg0, which is never translated, as
+    // libultra's osUnmapTLBAll does.
+    for (int i = 0; i < 32; i++) c->tlb[i].entryHi = 0xFFFFFFFF80000000ull + (u64)i * 0x2000;
     c->pc = 0xFFFFFFFFBFC00000ull;
     c->npc = c->pc + 4;
     g_cop0Latch = 0;

@@ -132,7 +132,18 @@ void rom_boot_hle(void) {
     c->gpr[29] = 0xFFFFFFFFA4001FF0ull;   // sp
     c->gpr[31] = 0xFFFFFFFFA4001550ull;   // ra
     c->gpr[11] = 0xFFFFFFFFA4000040ull;   // t3
-    c->cop0[C0_STATUS] = 0x34000000;
+    // COP0 as IPL3 leaves it on hardware (PeterLemon/N64 Exceptions/*.png, captured from a console, "before" column):
+    // Status CU1 | FR | SR | KX | SX | UX, EPC / ErrorEPC / BadVAddr all ones, Context's BadVPN2 all ones.
+    c->cop0[C0_STATUS] = 0x241000E0;
+    c->cop0[C0_EPC] = ~0ull;
+    c->cop0[C0_ERROREPC] = ~0ull;
+    c->cop0[C0_BADVADDR] = ~0ull;
+    c->cop0[C0_CONTEXT] = 0x007FFFF0;
+    c->cop0[C0_CAUSE] = 0xB000007C;  // BD, CE 3, ExcCode 31 (CP0/COP0Cause: the value after boot)
+    c->cop0[C0_LLADDR] = 0xFFFFFFFF;
+    c->cop0[C0_WATCHLO] = 0xFFFFFFFB;
+    c->cop0[C0_WATCHHI] = 0x0000000F;
+    c->cop0[C0_XCONTEXT] = SEXT32(0xFFFFFFF0);
     c->cop0[C0_CONFIG] = 0x7006E463;
     c->pc = SEXT32(entry);
     c->npc = c->pc + 4;

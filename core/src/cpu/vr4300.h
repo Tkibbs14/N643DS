@@ -65,6 +65,7 @@ void vr_step(Vr* c);
 void vr_set_ip(Vr* c, int bit, bool on);  // Cause.IP bit (2 = RCP via MI, 7 = timer)
 u32 vr_count(const Vr* c);
 void vr_exception(Vr* c, int code, int ce);
+void vr_address_error(Vr* c, u64 va, bool write);
 void vr_check_irq(Vr* c);
 extern volatile bool g_cpuStop;
 

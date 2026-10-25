@@ -41,10 +41,7 @@ static bool tlb_lookup(Vr* c, u64 va, bool write, u32* pa, bool addr64) {
     return false;
 }
 
-static void addr_error(Vr* c, u64 va, bool write) {
-    c->cop0[C0_BADVADDR] = va;
-    vr_exception(c, write ? EXC_ADES : EXC_ADEL, 0);
-}
+#define addr_error vr_address_error
 
 bool vr_translate(Vr* c, u64 va, bool write, u32* pa) {
     u32 s = (u32)c->cop0[C0_STATUS];
@@ -60,7 +57,10 @@ bool vr_translate(Vr* c, u64 va, bool write, u32* pa) {
             *pa = a & 0x1FFFFFFF;
             return true;
         }
-        return tlb_lookup(c, va, write, pa, false);
+        // The refill vector follows the mode's addressing (KX / SX / UX), not the address: with KX set, a miss on a
+        // 32-bit address takes the XTLB vector 0x080 (PeterLemon/N64 Exceptions/TLB, hardware captures).
+        bool mode64 = ksu == 0 ? (s & ST_KX) : ksu == 1 ? (s & ST_SX) : (s & ST_UX);
+        return tlb_lookup(c, va, write, pa, mode64);
     }
     // 64-bit addresses need the mode's 64-bit addressing bit (KX / SX / UX).
     bool ok64 = ksu == 0 ? (s & ST_KX) : ksu == 1 ? (s & ST_SX) : (s & ST_UX);

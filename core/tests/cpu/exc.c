@@ -146,6 +146,10 @@ static void tlb(void) {
     v = *(volatile u32*)0x00011000u;  // odd page of entry 5: not valid
     EXC("tlb invalid load", 2, 0x180);
     EXPECT("tlb invalid badvaddr", g_exc.badvaddr, 0x11000);
+    // A refill takes vector 0x000 in 32-bit addressing and 0x080 (XTLB) with KX set, whatever the address (IPL3 leaves
+    // KX set; PeterLemon/N64 Exceptions/TLB, hardware captures).
+    u32 st = c0_status();
+    c0_set_status(st & ~0xE0u);
     clear();
     v = *(volatile u32*)0x00400000u;  // no entry
     EXC("tlb refill load", 2, 0x000);
@@ -154,6 +158,11 @@ static void tlb(void) {
     clear();
     *(volatile u32*)0x00400000u = 1;
     EXC("tlb refill store", 3, 0x000);
+    c0_set_status(st | 0x80u);
+    clear();
+    v = *(volatile u32*)0x00400000u;
+    EXC("tlb refill load with KX", 2, 0x080);
+    c0_set_status(st);
     clear();
     *(volatile u32*)0x00020000u = 1;  // D clear
     EXC("tlb modified", 1, 0x180);

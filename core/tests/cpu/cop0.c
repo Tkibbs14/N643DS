@@ -24,7 +24,7 @@ int test_main(void) {
     MTC0(6, 0);
     // Cause: only IP0 / IP1 are writable
     MTC0(13, 0xFFFFFFFF);
-    EXPECT("Cause writable bits", MFC0(13) & 0x3FF, 0x300);
+    EXPECT("Cause writable bits", MFC0(13) & 0x300, 0x300);
     MTC0(13, 0);
     // Index keeps 6 bits; PageMask bits 24:13; EntryLo 30 bits
     MTC0(0, 0xFFFFFFFF);
