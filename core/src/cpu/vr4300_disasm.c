@@ -26,7 +26,7 @@ const char* vr_disasm(u32 op, u64 pc, char* buf, size_t n) {
     int rs = (op >> 21) & 31, rt = (op >> 16) & 31, rd = (op >> 11) & 31, sa = (op >> 6) & 31;
     s16 imm = (s16)op;
     u32 primary = op >> 26;
-    u32 btarget = (u32)(pc + 4 + ((s64)imm << 2));
+    unsigned btarget = (unsigned)(pc + 4 + ((s64)imm << 2));
     if (op == 0) { snprintf(buf, n, "nop"); return buf; }
     if (primary == 0) {
         const char* m = SPECIAL[op & 63];
@@ -53,7 +53,7 @@ const char* vr_disasm(u32 op, u64 pc, char* buf, size_t n) {
     const char* m = MAIN[primary];
     if (!m) { snprintf(buf, n, "?"); return buf; }
     if (primary == 2 || primary == 3) {
-        snprintf(buf, n, "%s 0x%08x", m, (u32)(((pc + 4) & 0xF0000000) | ((op & 0x03FFFFFF) << 2)));
+        snprintf(buf, n, "%s 0x%08x", m, (unsigned)(((pc + 4) & 0xF0000000) | ((op & 0x03FFFFFF) << 2)));
     } else if (primary == 4 || primary == 5 || primary == 0x14 || primary == 0x15) {
         snprintf(buf, n, "%s %s, %s, 0x%08x", m, R[rs], R[rt], btarget);
     } else if (primary == 6 || primary == 7 || primary == 0x16 || primary == 0x17) {
@@ -62,7 +62,7 @@ const char* vr_disasm(u32 op, u64 pc, char* buf, size_t n) {
         snprintf(buf, n, "lui %s, 0x%04x", R[rt], (u16)op);
     } else if (primary >= 0x08 && primary <= 0x19) {
         if (primary >= 0x10 && primary <= 0x12) {
-            snprintf(buf, n, "%s rs=%d rt=%d rd=%d fn=0x%02x", m, rs, rt, rd, op & 63);
+            snprintf(buf, n, "%s rs=%d rt=%d rd=%d fn=0x%02x", m, rs, rt, rd, (unsigned)(op & 63));
         } else if (primary >= 0x0C && primary <= 0x0E) {
             snprintf(buf, n, "%s %s, %s, 0x%04x", m, R[rt], R[rs], (u16)op);
         } else {

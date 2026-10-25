@@ -50,7 +50,7 @@ bool rom_load(const char* path) {
             raw[i] = raw[i + 3]; raw[i + 1] = raw[i + 2]; raw[i + 2] = b; raw[i + 3] = a;
         }
     } else if (magic != 0x80371240u) {
-        fprintf(stderr, "%s: unknown header 0x%08x (booting it anyway)\n", path, magic);
+        fprintf(stderr, "%s: unknown header 0x%08x (booting it anyway)\n", path, (unsigned)magic);
     }
 
     memset(&g_rom, 0, sizeof g_rom);

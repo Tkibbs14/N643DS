@@ -19,3 +19,12 @@ out/
 core/out/
 third_party/testroms/
 **/__pycache__/
+
+# Dev relay access token (tools/relay.sh, sdmc:/n643ds/relay.txt): never committed
+core/host3ds/relay.txt
+core/host3ds/build/
+core/host3ds/romfs/
+core/host3ds/*.3dsx
+core/host3ds/*.elf
+core/host3ds/*.smdh
+core/host3ds/*.map
