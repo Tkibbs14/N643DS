@@ -192,6 +192,7 @@ static const char* run_loaded(u32 seconds, bool interactive) {
     g_quit = false;
     g_isvResult = -1;
     g_isvLen = 0;
+    g_pad[0].present = true;  // a controller is plugged in, also in relay runs (no input)
     sys_reset();
     rom_boot_hle();
     g_ranGame = true;

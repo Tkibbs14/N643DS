@@ -1,5 +1,6 @@
 // Signal Processor (RSP) interface and the RDP's command registers. The RSP runs on the interpreter in src/rsp
 // (g_rspMode RSP_LLE, the default) or is stubbed (RSP_STUB: tasks complete after a fixed time, nothing is drawn).
+#include <stdio.h>
 #include <string.h>
 #include "sys.h"
 #include "../cpu/vr4300.h"
@@ -33,6 +34,10 @@ static void dma(bool toSp, u32 lenReg) {
     u32 skip = (lenReg >> 20) & 0xFF8;
     u32 mem = g_memAddr & 0x1FF8, bank = mem & 0x1000;
     u32 dram = g_dramAddr & 0xFFFFF8;
+    if (g_traceExc)
+        fprintf(stderr, "  SP DMA %s: %s 0x%03x, RDRAM 0x%06x, %u x %u bytes, skip %u\n", toSp ? "to SP" : "from SP",
+                bank ? "IMEM" : "DMEM", (unsigned)(mem & 0xFFF), (unsigned)dram, (unsigned)count, (unsigned)(len + 1),
+                (unsigned)skip);
     for (u32 r = 0; r < count; r++) {
         for (u32 i = 0; i <= len; i += 4) {
             u32 m = bank | ((mem + i) & 0xFFF);
@@ -74,6 +79,15 @@ static void task_start(void) {
     g_rspTotalCycles += ran;
     g_pc = g_rsp.pc;
     g_rspBroke = g_rsp.halted;
+    if (g_traceExc)
+        fprintf(stderr, "  RSP task type %u: %llu RSP cycles, %s, pc %03x\n", (unsigned)g_taskType, (unsigned long long)ran,
+                g_rsp.halted ? "break" : "NO BREAK (cycle limit)", (unsigned)g_rsp.pc);
+    if (g_traceExc && !g_rsp.halted) {  // the loop it is stuck in
+        for (u32 a = (g_rsp.pc - 0x20) & 0xFFC, k = 0; k < 16; k++, a = (a + 4) & 0xFFC)
+            fprintf(stderr, "    imem %03x: %08x\n", (unsigned)a, (unsigned)m_r32(g_mem.spmem, 0x1000 | a));
+        for (int r = 0; r < 32; r++) fprintf(stderr, "%s r%d=%08x", r % 8 ? "" : "\n   ", r, (unsigned)g_rsp.r[r]);
+        fprintf(stderr, "\n");
+    }
     sched_at(EV_SP_TASK, g_cpu.cycles + ran * 3 / 2 + 1);
 }
 

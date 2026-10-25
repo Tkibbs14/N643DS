@@ -1,10 +1,13 @@
 // RSP scalar unit: a 32-bit MIPS subset running from IMEM (4 KB, 12-bit pc), loads and stores in DMEM (4 KB, any
 // alignment, wrapping), COP0 = the SP and DP registers, COP2 = the vector unit (rsp_vu.c). No exceptions; BREAK halts.
 #include "rsp.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "../sys/sys.h"
 
 Rsp g_rsp;
+u64 g_rspTrace;
 
 void rsp_vu_cop2(u32 op);
 void rsp_vu_lwc2(u32 op);
@@ -51,6 +54,10 @@ static void step(void) {
     c->branchPending = false;
     u32* r = c->r;
     u32 rs = r[RS], rt = r[RT];
+    if (g_rspTrace) {  // N64_RSP_TRACE=n: the first n instructions (debugging)
+        g_rspTrace--;
+        fprintf(stderr, "  rsp %03x: %08x  rs=%08x rt=%08x\n", (unsigned)pc, (unsigned)op, (unsigned)rs, (unsigned)rt);
+    }
     switch (op >> 26) {
     case 0x00:
         switch (op & 63) {
@@ -138,6 +145,7 @@ u64 rsp_run(u64 maxCycles) {
 void rsp_reset(void) {
     memset(&g_rsp, 0, sizeof g_rsp);
     rsp_init_tables();
+    if (getenv("N64_RSP_TRACE")) g_rspTrace = strtoull(getenv("N64_RSP_TRACE"), NULL, 0);
 }
 
 // Accessors the vector unit's loads / stores use (rsp_vu.c)

@@ -335,15 +335,18 @@ static void triangle(const u64* w, bool shade, bool tex, bool zb) {
         dzde = (s32)(p[1] >> 32);
     }
     if (!shade) for (int k = 0; k < 4; k++) sc[k] = (s32)(((R.prim >> (24 - 8 * k)) & 255) << 16);
+    // Edges in quarter scanlines (as the RDP walks them): XH and XM start at the top of YH's scanline, XL at YM
+    // itself. Each row is sampled once, at its third subscanline.
     int ytop = yh >> 2;
     int sx0 = (int)R.sxh >> 2, sy0 = (int)R.syh >> 2, sx1 = (int)R.sxl >> 2, sy1 = (int)R.syl >> 2;
     if (sx1 > (int)R.ciWidth) sx1 = (int)R.ciWidth;
     bool persp = OM(51, 1);
     for (int y = ytop; y * 4 < yl; y++) {
-        if (y * 4 + 2 < yh) continue;  // the row's centre is above the triangle
-        int dy = y - ytop;
-        s32 xa = xh + dxhdy * dy;
-        s32 xb = (y * 4 + 2 < ym) ? xm + dxmdy * dy : xl + dxldy * (y - (ym >> 2));
+        s32 yq = y * 4 + 2;
+        if (yq < yh || yq >= yl) continue;
+        s32 dq = yq - (yh & ~3);          // quarter scanlines from the major edge's start
+        s32 xa = xh + (s32)(((s64)dxhdy * dq) >> 2);
+        s32 xb = yq < ym ? xm + (s32)(((s64)dxmdy * dq) >> 2) : xl + (s32)(((s64)dxldy * (yq - ym)) >> 2);
         s32 left = lft ? xa : xb, right = lft ? xb : xa;
         if (y < sy0 || y >= sy1) continue;
         int x0 = (int)((left + 0xFFFF) >> 16), x1 = (int)((right + 0xFFFF) >> 16);
@@ -353,14 +356,14 @@ static void triangle(const u64* w, bool shade, bool tex, bool zb) {
             s64 dx = ((s64)x << 16) - xa;  // from the major edge, s15.16
             Col c;
             int ch[4];
-            for (int k = 0; k < 4; k++) ch[k] = clamp8((int)((sc[k] + (s64)sde[k] * dy + ((s64)sdx[k] * dx >> 16)) >> 16));
+            for (int k = 0; k < 4; k++) ch[k] = clamp8((int)((sc[k] + ((s64)sde[k] * dq >> 2) + ((s64)sdx[k] * dx >> 16)) >> 16));
             c.r = ch[0]; c.g = ch[1]; c.b = ch[2]; c.a = ch[3];
             s32 s = 0, t = 0;
             if (tex) {
-                s64 S = tc[0] + (s64)tde[0] * dy + ((s64)tdx[0] * dx >> 16);
-                s64 T = tc[1] + (s64)tde[1] * dy + ((s64)tdx[1] * dx >> 16);
+                s64 S = tc[0] + ((s64)tde[0] * dq >> 2) + ((s64)tdx[0] * dx >> 16);
+                s64 T = tc[1] + ((s64)tde[1] * dq >> 2) + ((s64)tdx[1] * dx >> 16);
                 if (persp) {
-                    s64 W = tc[2] + (s64)tde[2] * dy + ((s64)tdx[2] * dx >> 16);
+                    s64 W = tc[2] + ((s64)tde[2] * dq >> 2) + ((s64)tdx[2] * dx >> 16);
                     if (W <= 0) W = 1;
                     s = (s32)((S << 15) / W);  // S / W in 10.5 (W is 1.0 at 0x8000 in its integer part)
                     t = (s32)((T << 15) / W);
@@ -371,7 +374,7 @@ static void triangle(const u64* w, bool shade, bool tex, bool zb) {
             }
             u32 z = 0;
             if (zb) {
-                s64 Z = z0 + (s64)dzde * dy + ((s64)dzdx * dx >> 16);
+                s64 Z = z0 + ((s64)dzde * dq >> 2) + ((s64)dzdx * dx >> 16);
                 if (Z < 0) Z = 0;
                 z = (u32)(Z >> 14);  // 18-bit
                 if (z > 0x3FFFF) z = 0x3FFFF;
