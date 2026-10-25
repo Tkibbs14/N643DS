@@ -6,7 +6,8 @@
 #        e.g. relay.sh run --rom "Mario 64" --seconds 120      relay.sh run --tests
 #   bash tools/relay.sh queue [options]   the same without following (prints the job id)
 #   bash tools/relay.sh log JOB | jobs | status | cancel JOB | push
-#   bash tools/relay.sh cmd JOB stop      a live command for the running job
+#   bash tools/relay.sh cmd JOB stop      a live command for the running job (stop, shot)
+#   bash tools/relay.sh frames JOB        its pictures into core/out/frames_JOB/
 #   bash tools/relay.sh switch PATH       start another .3dsx on the 2DS (e.g. sdmc:/3ds/gc3ds.3dsx)
 # Settings: core/host3ds/relay.txt ("url <base>", "token <secret>"; never committed; gc3ds's file works as is).
 set -euo pipefail
@@ -73,5 +74,11 @@ case "$cmd" in
     status) api "$url/status" ;;
     cancel) api -X POST "$url/jobs/$1/cancel" ;;
     cmd) job="$1"; shift; printf '%s' "$*" | api -X POST -H 'Content-Type: text/plain' --data-binary @- "$url/jobs/$job/cmd" ;;
+    # frames JOB: the job's pictures (--shots N, or "cmd JOB shot") into core/out/frames_JOB/ as BMP
+    frames) d="$here/out/frames_$1"; mkdir -p "$d"
+            for name in $(api "$url/jobs/$1/frames" | tr -d '\r'); do
+                [ -f "$d/$name" ] || api -o "$d/$name" "$url/jobs/$1/frame/$name" || rm -f "$d/$name"
+                echo "$d/$name"
+            done ;;
     *) sed -n '2,11p' "$0"; exit 1 ;;
 esac

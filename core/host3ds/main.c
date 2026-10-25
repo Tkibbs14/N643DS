@@ -135,13 +135,54 @@ static void on_field(void) {
     if (g_showEvery && g_stats.fields % (u64)g_showEvery == 0) show_picture();
 }
 
+// The VI picture as a 24-bit BMP for the relay job (tools/relay.sh frames JOB): live command "shot", or every
+// --shots N seconds.
+static void send_frame(void) {
+    u32 type = g_vi.ctrl & 3, w = g_vi.width;
+    if (type < 2 || !w || w > 640) return;
+    u32 vs = (g_vi.vStart >> 16) & 0x3FF, ve = g_vi.vStart & 0x3FF;
+    u32 lines = ve > vs ? (ve - vs) / 2 : 240;
+    u32 yscale = g_vi.yScale & 0xFFF;
+    u32 h = yscale ? lines * yscale / 1024 : 240;
+    if (!h || h > 480) h = 240;
+    u32 stride = (w * 3 + 3) & ~3u, size = 54 + stride * h;
+    u8* b = malloc(size);
+    if (!b) return;
+    memset(b, 0, 54);
+    b[0] = 'B'; b[1] = 'M';
+    memcpy(b + 2, &size, 4);
+    u32 v = 54; memcpy(b + 10, &v, 4);
+    v = 40; memcpy(b + 14, &v, 4);
+    memcpy(b + 18, &w, 4);
+    memcpy(b + 22, &h, 4);
+    b[26] = 1; b[28] = 24;
+    for (u32 y = 0; y < h; y++) {
+        u8* row = b + 54 + (h - 1 - y) * stride;
+        for (u32 x = 0; x < w; x++) {
+            u8 r, g, bl;
+            if (type == 2) {
+                u16 p = m_r16(g_mem.rdram, (g_vi.origin + (y * w + x) * 2) & (g_mem.rdramSize - 1));
+                r = (u8)(((p >> 11) & 31) << 3); g = (u8)(((p >> 6) & 31) << 3); bl = (u8)(((p >> 1) & 31) << 3);
+            } else {
+                u32 p = m_r32(g_mem.rdram, (g_vi.origin + (y * w + x) * 4) & (g_mem.rdramSize - 1));
+                r = (u8)(p >> 24); g = (u8)(p >> 16); bl = (u8)(p >> 8);
+            }
+            row[x * 3] = bl; row[x * 3 + 1] = g; row[x * 3 + 2] = r;
+        }
+    }
+    relay_frame(b, size);
+    free(b);
+}
+
 static void apply_cmds(void) {
     char cmd[128];
     while (relay_take_cmd(cmd, sizeof cmd)) {
         logf_("# command %s\n", cmd);
         if (!strcmp(cmd, "stop")) g_stopRun = g_stopJob = true;
+        else if (!strcmp(cmd, "shot")) send_frame();
     }
 }
+static u32 g_shotSecs;  // --shots N: a frame to the relay every N seconds
 
 // Runs a loaded cartridge for `seconds` of real time (0: until START+SELECT), logging speed every 10 s.
 static const char* run_loaded(u32 seconds, bool interactive) {
@@ -156,7 +197,7 @@ static const char* run_loaded(u32 seconds, bool interactive) {
     g_ranGame = true;
     logf_("# rom \"%s\" %.4s cic %d, entry %08lx\n", g_rom.name, g_rom.code, g_rom.cic, (unsigned long)g_rom.entry);
     logf_("t_s,fields,emu_s,speed_pct,mips\n");
-    u64 t0 = svcGetSystemTick(), lastT = t0, lastFields = 0, lastIns = 0, lastCyc = 0;
+    u64 t0 = svcGetSystemTick(), lastT = t0, lastFields = 0, lastIns = 0, lastCyc = 0, lastShot = t0;
     g_fieldMark = 0;
     for (;;) {
         u64 field = g_vi.cyclesPerField ? g_vi.cyclesPerField : CPU_HZ / 60;
@@ -184,6 +225,7 @@ static const char* run_loaded(u32 seconds, bool interactive) {
             lastIns = g_cpu.cycles;
             lastCyc = g_cpu.cycles;
         }
+        if (!interactive && g_shotSecs && now - lastShot >= (u64)g_shotSecs * SYSCLOCK_ARM11) { send_frame(); lastShot = now; }
         if (seconds && now - t0 >= (u64)seconds * SYSCLOCK_ARM11) break;
     }
     (void)lastFields;
@@ -429,6 +471,10 @@ static void remote_mode(const char* selfPath) {
         if (opt_str(job.args, "--seconds", val, sizeof val)) seconds = (u32)strtoul(val, NULL, 10);
         g_showEvery = 2;
         if (opt_str(job.args, "--show", val, sizeof val)) g_showEvery = atoi(val);
+        g_rspMode = RSP_STUB;
+        if (opt_str(job.args, "--rsp", val, sizeof val) && !strcmp(val, "lle")) g_rspMode = RSP_LLE;
+        g_shotSecs = 0;
+        if (opt_str(job.args, "--shots", val, sizeof val)) g_shotSecs = (u32)strtoul(val, NULL, 10);
         g_jitEnabled = false;
         if (opt_str(job.args, "--jit", val, sizeof val) && !strcmp(val, "on")) {
             g_jitEnabled = jit_init();
@@ -485,6 +531,9 @@ static void menu(const char* selfPath) {
                     snprintf(path, sizeof path, ROM_DIR "/%s", g_roms[sel]);
                     consoleClear();
                     g_showEvery = 2;
+                    // By hand: the JIT, and the low-level RSP with the software renderer so the picture shows (slowly)
+                    g_jitEnabled = jit_init();
+                    g_rspMode = RSP_LLE;
                     if (load_rom(path)) run_loaded(0, true);
                 } else if (sel == g_nroms) {
                     consoleClear();
