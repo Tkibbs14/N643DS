@@ -54,7 +54,7 @@ typedef struct Vr {
     u64 branchTo;      // npc after the delay slot (set by branches)
     bool branchPending;
 
-    u64 instructions;  // retired, for statistics
+    // Instructions retired equal cycles (one cycle per instruction, docs/DESIGN.md "Timing").
 } Vr;
 
 extern Vr g_cpu;
@@ -68,6 +68,10 @@ void vr_exception(Vr* c, int code, int ce);
 void vr_address_error(Vr* c, u64 va, bool write);
 void vr_check_irq(Vr* c);
 extern volatile bool g_cpuStop;
+extern u64 g_vrRunUntil;
+extern bool g_vrIrqPending;
+int vr_jit_fallback(Vr* c, u32 op, u32 remaining, u32 inDelay);
+extern bool g_jitCodeHit;  // set by jit_code_written: compiled code was overwritten
 
 // Address translation (vr4300_tlb.c). Returns false after raising the exception.
 bool vr_translate(Vr* c, u64 vaddr, bool write, u32* paddr);
@@ -88,7 +92,7 @@ void vr_fpr_write_d(Vr* c, int r, u64 v);
 // Debugging
 void vr_trace_enable(u64 count, u64 fromInstruction);
 // Planted bugs that the CPU tests must catch (N64_PLANT=n, core/tests/cpu/run_tests.sh plant): 1 DSUBU, 2 LDR,
-// 3 the FPU rounding mode, 4 branch-likely nullification, 5 the SRA quirk.
+// 3 the FPU rounding mode, 4 branch-likely nullification, 5 the SRA quirk, 6 the JIT's ADDU (core/tools/jit_check.sh plant).
 extern int g_plant;
 extern int g_traceExc;
 extern u32 g_watchPa, g_trapPcAbove;

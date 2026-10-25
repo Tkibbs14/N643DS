@@ -80,6 +80,7 @@ void pi_write(u32 reg, u32 v, u32 mask) {
                 if (d < g_mem.rdramSize) m_w8(g_mem.rdram, d, cart_byte(g_cartAddr + i));
             }
         }
+        code_range_written(g_dramAddr, len);
         g_dramAddr = (g_dramAddr + len + 7) & 0xFFFFF8;
         g_cartAddr = (g_cartAddr + len + 1) & ~1u;
         start(len);

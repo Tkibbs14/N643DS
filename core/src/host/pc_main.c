@@ -11,6 +11,7 @@
 #include "../sys/rom.h"
 #include "../sys/sys.h"
 #include "../sys/system.h"
+#include "../jit/jit.h"
 
 static u64 g_maxFields = 600;
 static const char* g_outDir;
@@ -98,7 +99,7 @@ int main(int argc, char** argv) {
     u64 trace = 0, traceFrom = 0;
     int saveType = SAVE_EEPROM4K, cic = 0;
     u32 rdram = 8u << 20;
-    bool stats = false;
+    bool stats = false, useJit = false, hash = false;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         bool more = i + 1 < argc;
@@ -116,6 +117,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--4mb")) rdram = 4u << 20;
         else if (!strcmp(a, "--until-isv")) g_untilIsv = true;
         else if (!strcmp(a, "--stats")) stats = true;
+        else if (!strcmp(a, "--jit")) useJit = true;
+        else if (!strcmp(a, "--hash")) hash = true;
         else if (a[0] != '-' && !romPath) romPath = a;
         else { fprintf(stderr, "unknown option %s\n", a); return 2; }
     }
@@ -135,6 +138,13 @@ int main(int argc, char** argv) {
     g_onIsv = on_isv;
     g_onField = on_field;
     g_pad[0].present = true;
+    if (useJit) {
+        if (!jit_available() || !jit_init()) {
+            fprintf(stderr, "no JIT in this build (it needs an ARM host: core/tools/arm_build.sh)\n");
+            return 2;
+        }
+        g_jitEnabled = true;
+    }
     sys_reset();
     rom_boot_hle();
     if (trace) vr_trace_enable(trace, traceFrom);
@@ -150,7 +160,7 @@ int main(int argc, char** argv) {
     }
     if (stats || !g_untilIsv) {
         fprintf(stderr, "ran %llu instructions, %llu cycles (%.3f emulated s) in %.2f s; pc 0x%08x\n",
-                (unsigned long long)g_cpu.instructions, (unsigned long long)g_cpu.cycles,
+                (unsigned long long)g_cpu.cycles, (unsigned long long)g_cpu.cycles,
                 (double)g_cpu.cycles / CPU_HZ, secs, (u32)g_cpu.pc);
         fprintf(stderr, "fields %llu, SP tasks gfx %llu audio %llu other %llu, PI DMAs %llu, SI DMAs %llu, AI buffers %llu\n",
                 (unsigned long long)g_stats.fields, (unsigned long long)g_stats.spTasks[1],
@@ -158,6 +168,30 @@ int main(int argc, char** argv) {
                 (unsigned long long)(g_stats.spTasks[0] + g_stats.spTasks[3] + g_stats.spTasks[4] + g_stats.spTasks[5] +
                                      g_stats.spTasks[6] + g_stats.spTasks[7]),
                 (unsigned long long)g_stats.piDmas, (unsigned long long)g_stats.siDmas, (unsigned long long)g_stats.aiBufs);
+        if (g_jitEnabled)
+            fprintf(stderr, "jit: %llu compiles (%llu instructions, %llu through the interpreter), %llu block entries, "
+                            "%llu interpreter steps, %llu invalidations, %llu flushes\n",
+                    (unsigned long long)g_jitStats.compiles, (unsigned long long)g_jitStats.insns,
+                    (unsigned long long)g_jitStats.fallbacks, (unsigned long long)g_jitStats.entries,
+                    (unsigned long long)g_jitStats.steps, (unsigned long long)g_jitStats.invalidations,
+                    (unsigned long long)g_jitStats.flushes);
+    }
+    if (hash) {
+        // The machine's end state, for comparing runs (core/tools/jit_check.sh): CPU registers, RDRAM, the count.
+        u64 h = 0xcbf29ce484222325ull;
+#define MIX(p, n) do { const u8* q_ = (const u8*)(p); for (size_t k_ = 0; k_ < (n); k_++) { h ^= q_[k_]; h *= 0x100000001b3ull; } } while (0)
+        MIX(g_cpu.gpr, sizeof g_cpu.gpr);
+        MIX(&g_cpu.hi, 8);
+        MIX(&g_cpu.lo, 8);
+        MIX(&g_cpu.pc, 8);
+        MIX(g_cpu.fpr, sizeof g_cpu.fpr);
+        MIX(&g_cpu.fcr31, 4);
+        MIX(&g_cpu.cycles, 8);
+        u64 regs = h;
+        MIX(g_mem.rdram, g_mem.rdramSize);
+#undef MIX
+        printf("state cycles %llu pc %08x regs %016llx all %016llx\n", (unsigned long long)g_cpu.cycles, (u32)g_cpu.pc,
+               (unsigned long long)regs, (unsigned long long)h);
     }
     if (g_untilIsv) {
         if (g_isvResult < 0) { fprintf(stderr, "no PASS / FAIL line before the limit\n"); return 3; }

@@ -19,6 +19,7 @@
 #include "../src/sys/rom.h"
 #include "../src/sys/sys.h"
 #include "../src/sys/system.h"
+#include "../src/jit/jit.h"
 
 #define ROM_DIR "sdmc:/n643ds/roms"
 #define PERF_PATH "sdmc:/n643ds/perf.csv"
@@ -171,7 +172,7 @@ static const char* run_loaded(u32 seconds, bool interactive) {
         if (now - lastT >= 10ull * SYSCLOCK_ARM11) {
             double dt = (double)(now - lastT) / SYSCLOCK_ARM11;
             double emu = (double)(g_cpu.cycles - lastCyc) / CPU_HZ;
-            double mips = (double)(g_cpu.instructions - lastIns) / dt / 1e6;
+            double mips = (double)(g_cpu.cycles - lastIns) / dt / 1e6;
             logf_("%.0f,%llu,%.3f,%.2f,%.2f\n", (double)(now - t0) / SYSCLOCK_ARM11, (unsigned long long)g_stats.fields,
                   (double)g_cpu.cycles / CPU_HZ, 100.0 * emu / dt, mips);
             consoleSelect(&g_con);
@@ -180,15 +181,21 @@ static const char* run_loaded(u32 seconds, bool interactive) {
                    (unsigned long long)g_stats.spTasks[2]);
             lastT = now;
             lastFields = g_stats.fields;
-            lastIns = g_cpu.instructions;
+            lastIns = g_cpu.cycles;
             lastCyc = g_cpu.cycles;
         }
         if (seconds && now - t0 >= (u64)seconds * SYSCLOCK_ARM11) break;
     }
     (void)lastFields;
     logf_("# end: %llu instructions, %llu fields, %.3f emulated s in %.1f s; pc %08lx\n",
-          (unsigned long long)g_cpu.instructions, (unsigned long long)g_stats.fields, (double)g_cpu.cycles / CPU_HZ,
+          (unsigned long long)g_cpu.cycles, (unsigned long long)g_stats.fields, (double)g_cpu.cycles / CPU_HZ,
           (double)(svcGetSystemTick() - t0) / SYSCLOCK_ARM11, (unsigned long)(u32)g_cpu.pc);
+    if (g_jitEnabled)
+        logf_("# jit: %llu compiles (%llu instructions, %llu interpreted), %llu entries, %llu steps, %llu invalidations, "
+              "%llu flushes\n", (unsigned long long)g_jitStats.compiles, (unsigned long long)g_jitStats.insns,
+              (unsigned long long)g_jitStats.fallbacks, (unsigned long long)g_jitStats.entries,
+              (unsigned long long)g_jitStats.steps, (unsigned long long)g_jitStats.invalidations,
+              (unsigned long long)g_jitStats.flushes);
     g_onIsv = NULL;
     g_onField = NULL;
     return "done";
@@ -421,6 +428,11 @@ static void remote_mode(const char* selfPath) {
         if (opt_str(job.args, "--seconds", val, sizeof val)) seconds = (u32)strtoul(val, NULL, 10);
         g_showEvery = 2;
         if (opt_str(job.args, "--show", val, sizeof val)) g_showEvery = atoi(val);
+        g_jitEnabled = false;
+        if (opt_str(job.args, "--jit", val, sizeof val) && !strcmp(val, "on")) {
+            g_jitEnabled = jit_init();
+            if (!g_jitEnabled) logf_("# jit: no code buffer, interpreter only\n");
+        }
         logf_("# N643DS build %s, job %u: %s\n", self, job.id, job.args);
         const char* result = "failed";
         if (strstr(job.args, "--tests")) {

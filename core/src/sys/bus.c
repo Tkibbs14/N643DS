@@ -6,6 +6,7 @@
 Mem g_mem;
 Pad g_pad[4];
 SysStats g_stats;
+u8 g_codePage[RDRAM_MAX >> 12];
 void (*g_onField)(void);
 void (*g_onIsv)(const char* s, u32 n);
 void (*g_onAudio)(const s16* lr, u32 frames, u32 rate);
@@ -89,6 +90,7 @@ u32 bus_r32(u32 pa) {
 
 void bus_w32(u32 pa, u32 v, u32 mask) {
     if (pa < g_mem.rdramSize) {
+        if (g_codePage[pa >> 12]) jit_code_written(pa, 4);
         m_w32(g_mem.rdram, pa, (m_r32(g_mem.rdram, pa) & ~mask) | (v & mask));
         return;
     }

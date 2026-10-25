@@ -38,7 +38,7 @@ static void dma(bool toSp, u32 lenReg) {
             u32 m = bank | ((mem + i) & 0xFFF);
             u32 d = (dram + i) & (g_mem.rdramSize - 1);
             if (toSp) m_w32(g_mem.spmem, m, m_r32(g_mem.rdram, d));
-            else m_w32(g_mem.rdram, d, m_r32(g_mem.spmem, m));
+            else { m_w32(g_mem.rdram, d, m_r32(g_mem.spmem, m)); if (g_codePage[d >> 12]) jit_code_written(d, 4); }
         }
         mem = bank | ((mem + len + 1) & 0xFFF);
         dram += len + 1 + skip;

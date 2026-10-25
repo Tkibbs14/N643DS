@@ -103,7 +103,7 @@ void vr_tlbwi(Vr* c) { tlb_write(c, (int)(c->cop0[C0_INDEX] & 31)); }
 void vr_tlbwr(Vr* c) {
     u32 wired = (u32)c->cop0[C0_WIRED] & 63;
     u32 r = 31;
-    if (wired <= 31) r = 31 - (u32)((c->instructions - c->cop0[C0_RANDOM]) % (32 - wired));
+    if (wired <= 31) r = 31 - (u32)((c->cycles - c->cop0[C0_RANDOM]) % (32 - wired));
     tlb_write(c, (int)r);
 }
 

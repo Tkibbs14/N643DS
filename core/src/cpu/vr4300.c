@@ -6,11 +6,12 @@
 #include <stdio.h>
 #include <string.h>
 #include "../sys/sys.h"
+#include "../jit/jit.h"
 
 Vr g_cpu;
 volatile bool g_cpuStop;
 int g_plant;
-static u64 g_runUntil;
+u64 g_vrRunUntil;  // vr_run stops when cycles reach it (the scheduler and interrupts lower it)
 static u64 g_traceLeft, g_traceFrom;
 int g_traceExc;  // --trace-exc: print every exception
 u32 g_watchPa;   // --watch PA: print CPU stores to that word (debugging)
@@ -18,7 +19,7 @@ u32 g_trapPcAbove;  // --trap-pc-above PA: report the first fetch at or above PA
 static u64 g_pcRing[32];
 static u32 g_pcPos;
 static u64 g_cop0Latch;  // the last value written to any COP0 register: read back from unimplemented ones (ares)
-static bool g_irqPending;
+bool g_vrIrqPending;  // an enabled interrupt is pending: taken before the next instruction
 
 #define RS ((op >> 21) & 31)
 #define RT ((op >> 16) & 31)
@@ -51,8 +52,8 @@ void sched_compare_event(void) {
 void vr_check_irq(Vr* c) {
     u32 st = (u32)c->cop0[C0_STATUS];
     u32 pend = (u32)c->cop0[C0_CAUSE] & st & 0xFF00;
-    g_irqPending = pend && (st & ST_IE) && !(st & (ST_EXL | ST_ERL));
-    if (g_irqPending) g_runUntil = c->cycles;  // leave vr_run's inner loop promptly
+    g_vrIrqPending = pend && (st & ST_IE) && !(st & (ST_EXL | ST_ERL));
+    if (g_vrIrqPending) g_vrRunUntil = c->cycles;  // leave vr_run's inner loop promptly
 }
 
 void vr_set_ip(Vr* c, int bit, bool on) {
@@ -63,10 +64,10 @@ void vr_set_ip(Vr* c, int bit, bool on) {
 }
 
 static void exception_at(Vr* c, int code, int ce, u32 vecOff) {
-    if (UNLIKELY(g_traceExc) || (UNLIKELY(g_traceLeft) && c->instructions >= g_traceFrom))
+    if (UNLIKELY(g_traceExc) || (UNLIKELY(g_traceLeft) && c->cycles >= g_traceFrom))
         fprintf(stderr, "  exception %d at %08x: status %08x cause %08x (instruction %llu)\n", code, (unsigned)c->pc,
                 (unsigned)c->cop0[C0_STATUS],
-                (unsigned)c->cop0[C0_CAUSE], (unsigned long long)c->instructions);
+                (unsigned)c->cop0[C0_CAUSE], (unsigned long long)c->cycles);
     u32 st = (unsigned)c->cop0[C0_STATUS];
     u64 cause = c->cop0[C0_CAUSE] & ~(0x7Cull | (3ull << 28) | (1ull << 31));
     cause |= (u64)(code << 2) | ((u64)ce << 28);
@@ -147,8 +148,9 @@ static bool st(Vr* c, u64 va, int size, u64 v) {
     if (!xlat(c, va, true, &pa)) return false;
     if (UNLIKELY(g_watchPa) && pa <= g_watchPa + 3 && pa + (u32)size > g_watchPa)
         fprintf(stderr, "  store %d bytes 0x%llx to 0x%08x at pc %08x (instruction %llu)\n", size, (unsigned long long)v,
-                (unsigned)pa, (unsigned)c->pc, (unsigned long long)c->instructions);
+                (unsigned)pa, (unsigned)c->pc, (unsigned long long)c->cycles);
     if (LIKELY(pa < g_mem.rdramSize)) {
+        if (UNLIKELY(g_codePage[pa >> 12])) jit_code_written(pa, (u32)size);
         switch (size) {
         case 1: m_w8(g_mem.rdram, pa, (u8)v); break;
         case 2: m_w16(g_mem.rdram, pa, (u16)v); break;
@@ -172,7 +174,7 @@ static bool fetch(Vr* c, u64 pc, u32* op) {
     if (!xlat(c, pc, false, &pa)) return false;
     if (UNLIKELY(g_trapPcAbove) && pa >= g_trapPcAbove && pa < 0x04000000u) {  // --trap-pc-above: first fetch there
         fprintf(stderr, "  fetch at 0x%08x (instruction %llu); last jumps (from>to):", (unsigned)pa,
-                (unsigned long long)c->instructions);
+                (unsigned long long)c->cycles);
         for (int i = 0; i < 32; i++) {
             u64 j = g_pcRing[(g_pcPos + i) & 31];
             fprintf(stderr, " %08x>%08x", (unsigned)(j >> 32), (unsigned)j);
@@ -256,7 +258,7 @@ static u32 cop0_random(const Vr* c) {
     u32 wired = (u32)c->cop0[C0_WIRED] & 63;
     if (wired > 31) return 31;
     u32 range = 32 - wired;
-    return 31 - (u32)((c->instructions - c->cop0[C0_RANDOM]) % range);
+    return 31 - (u32)((c->cycles - c->cop0[C0_RANDOM]) % range);
 }
 
 static u64 mfc0(Vr* c, int r) {
@@ -278,7 +280,7 @@ static void mtc0(Vr* c, int r, u64 v) {
     case C0_PAGEMASK: c->cop0[r] = v & 0x01FFE000; break;
     case C0_WIRED:
         c->cop0[r] = v & 63;
-        c->cop0[C0_RANDOM] = c->instructions;  // Random restarts at 31
+        c->cop0[C0_RANDOM] = c->cycles;  // Random restarts at 31
         break;
     case C0_BADVADDR: break;
     case C0_COUNT:
@@ -488,7 +490,7 @@ static void op_cop0(Vr* c, u32 op) {
                 g_pcRing[g_pcPos++ & 31] = (c->pc << 32) | (u32)c->npc;
                 if ((u32)c->npc >= 0x80400000u && (u32)c->npc < 0x80800000u)
                     fprintf(stderr, "  eret to %08x (instruction %llu)\n", (unsigned)c->npc,
-                            (unsigned long long)c->instructions);
+                            (unsigned long long)c->cycles);
             }
             vr_check_irq(c);
             break;
@@ -694,19 +696,43 @@ static void exec(Vr* c, u32 op) {
 }
 
 // ---- Stepping -----------------------------------------------------------------------------------------------------
+// The JIT's way to run one instruction it does not translate (jit.c): exactly what vr_step does after fetching, with
+// the cycle count already advanced by the JIT and c->pc at the instruction. Returns nonzero when the compiled block
+// must end after this instruction, with pc / npc set for the dispatcher: an exception, a COP0 instruction (it may
+// change the mode or enable an interrupt), compiled code overwritten, or the scheduler's limit now inside the rest of
+// the block (`remaining` instructions). In a delay slot only an exception ends it: the block ends after the slot.
+int vr_jit_fallback(Vr* c, u32 op, u32 remaining, u32 inDelay) {
+    c->inDelay = inDelay != 0;
+    c->nextInDelay = false;
+    c->excTaken = false;
+    c->branchPending = false;
+    u64 after = c->pc + 4;
+    c->npc = after;
+    g_jitCodeHit = false;
+    exec(c, op);
+    c->gpr[0] = 0;
+    if (c->excTaken) return 1;
+    if (inDelay) return 0;
+    if ((op >> 26) == 0x10 || g_jitCodeHit || c->cycles + remaining > g_vrRunUntil || g_vrIrqPending) {
+        c->pc = c->npc;  // ERET set npc to its target; everything else continues at pc + 4
+        c->npc = c->pc + 4;
+        return 1;
+    }
+    return 0;
+}
+
 void vr_step(Vr* c) {
     c->inDelay = c->nextInDelay;
     c->nextInDelay = false;
     c->excTaken = false;
     c->cycles += 1;
-    c->instructions++;
-    if (UNLIKELY(g_irqPending)) {
+    if (UNLIKELY(g_vrIrqPending)) {
         exception_at(c, EXC_INT, 0, 0x180);
         return;
     }
     u32 op;
     if (fetch(c, c->pc, &op)) {
-        if (UNLIKELY(g_traceLeft) && c->instructions >= g_traceFrom) {
+        if (UNLIKELY(g_traceLeft) && c->cycles >= g_traceFrom) {
             char buf[96];
             u64 before[32];
             g_traceLeft--;
@@ -733,14 +759,15 @@ void vr_step(Vr* c) {
 }
 
 void vr_run(Vr* c, u64 untilCycles) {
-    g_runUntil = untilCycles;
-    while (c->cycles < g_runUntil && !g_cpuStop) vr_step(c);
+    if (g_jitEnabled) { jit_run(c, untilCycles); return; }
+    g_vrRunUntil = untilCycles;
+    while (c->cycles < g_vrRunUntil && !g_cpuStop) vr_step(c);
 }
 
 // The scheduler lowers the run limit when an event lands before it (a DMA started by this instruction, say).
 void vr_run_limit(u64 when);
 void vr_run_limit(u64 when) {
-    if (when < g_runUntil) g_runUntil = when;
+    if (when < g_vrRunUntil) g_vrRunUntil = when;
 }
 
 void vr_reset(Vr* c) {
@@ -759,6 +786,6 @@ void vr_reset(Vr* c) {
     c->npc = c->pc + 4;
     g_cop0Latch = 0;
     g_cop2Latch = 0;
-    g_irqPending = false;
+    g_vrIrqPending = false;
     schedule_compare(c);
 }

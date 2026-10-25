@@ -109,6 +109,7 @@ void si_write(u32 reg, u32 v, u32 mask) {
     case 0x00: g_dramAddr = v & 0xFFFFF8; break;
     case 0x04:  // PIF RAM -> RDRAM
         for (u32 i = 0; i < 64; i += 4) m_w32(g_mem.rdram, (g_dramAddr + i) & (g_mem.rdramSize - 1), m_r32(g_mem.pifram, i));
+        code_range_written(g_dramAddr & (g_mem.rdramSize - 1), 64);
         g_status |= 1;
         g_stats.siDmas++;
         sched_at(EV_SI_DMA, g_cpu.cycles + SI_DMA_CYCLES);

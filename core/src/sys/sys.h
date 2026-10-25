@@ -125,3 +125,13 @@ typedef struct {
     u32 cyclesPerField;
 } ViState;
 extern ViState g_vi;
+
+// ---- Compiled code (src/jit) ----------------------------------------------------------------------------------------
+// One byte per 4 KB page of RDRAM: nonzero while the JIT holds code compiled from that page. Every write into RDRAM
+// (CPU stores, DMA) checks it and tells the JIT, which drops the page's code.
+extern u8 g_codePage[RDRAM_MAX >> 12];
+void jit_code_written(u32 pa, u32 len);
+static inline void code_range_written(u32 pa, u32 len) {
+    for (u32 p = pa >> 12, e = (pa + len - 1) >> 12; p <= e && p < (RDRAM_MAX >> 12); p++)
+        if (g_codePage[p]) { jit_code_written(p << 12, 0x1000); }
+}
