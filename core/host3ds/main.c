@@ -507,6 +507,7 @@ static void menu(const char* selfPath) {
 int main(int argc, char** argv) {
     const char* selfPath = argc > 0 && argv[0] && !strncmp(argv[0], "sdmc:/", 6) ? argv[0] : "sdmc:/3ds/n643ds.3dsx";
     osSetSpeedupEnable(true);
+    g_rspMode = RSP_STUB;  // the low-level RSP is a PC reference: too slow here until the high-level microcode exists
     APT_SetAppCpuTimeLimit(80);  // core 1 for the relay and restart threads (without it they cannot be created there)
     gfxInitDefault();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);

@@ -120,6 +120,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--jit")) useJit = true;
         else if (!strcmp(a, "--hash")) hash = true;
         else if (!strcmp(a, "--slice")) sliceFields = true;
+        else if (!strcmp(a, "--rsp") && more) g_rspMode = !strcmp(argv[++i], "stub") ? RSP_STUB : RSP_LLE;
         else if (a[0] != '-' && !romPath) romPath = a;
         else { fprintf(stderr, "unknown option %s\n", a); return 2; }
     }

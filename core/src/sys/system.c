@@ -5,6 +5,8 @@
 #include "system.h"
 #include "../cpu/vr4300.h"
 #include "../jit/jit.h"
+#include "../rsp/rsp.h"
+void rdp_soft_reset(void);
 
 void mi_reset(void);
 volatile bool g_quit;
@@ -32,6 +34,9 @@ void sys_reset(void) {
     memset(g_mem.isv, 0, sizeof g_mem.isv);
     memset(&g_stats, 0, sizeof g_stats);
     sched_reset();
+    rsp_reset();
+    rdp_reset();
+    rdp_soft_reset();
     vr_reset(&g_cpu);
     mi_reset();
     vi_reset();

@@ -13,7 +13,7 @@ include $(DEVKITARM)/3ds_rules
 
 TARGET      := n643ds
 BUILD       := build
-SOURCES     := . ../src/cpu ../src/sys ../src/jit
+SOURCES     := . ../src/cpu ../src/sys ../src/jit ../src/rsp ../src/rdp
 DATA        :=
 INCLUDES    := .
 ROMFS       := romfs

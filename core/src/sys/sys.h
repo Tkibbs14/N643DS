@@ -135,3 +135,13 @@ static inline void code_range_written(u32 pa, u32 len) {
     for (u32 p = pa >> 12, e = (pa + len - 1) >> 12; p <= e && p < (RDRAM_MAX >> 12); p++)
         if (g_codePage[p]) { jit_code_written(p << 12, 0x1000); }
 }
+
+// ---- RSP / RDP --------------------------------------------------------------------------------------------------------
+enum { RSP_STUB, RSP_LLE };
+extern int g_rspMode;
+extern u64 g_rspTotalCycles;
+// The RDP's command stream from start to end (RDRAM, or DMEM when xbus), as written to DP_END (src/rdp)
+void rdp_process(u32 start, u32 end, bool xbus);
+void rdp_reset(void);
+typedef struct { u64 commands, triangles, rects, fills, syncFull, bytes; } RdpStats;
+extern RdpStats g_rdpStats;

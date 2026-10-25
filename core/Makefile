@@ -6,7 +6,7 @@ LDLIBS  := -lm
 BUILD   ?= build
 .DEFAULT_GOAL := $(BUILD)/n64emu
 
-SRC := $(wildcard src/cpu/*.c) $(wildcard src/sys/*.c) $(wildcard src/jit/*.c) $(wildcard src/host/*.c)
+SRC := $(wildcard src/cpu/*.c) $(wildcard src/sys/*.c) $(wildcard src/jit/*.c) $(wildcard src/rsp/*.c) $(wildcard src/rdp/*.c) $(wildcard src/host/*.c)
 OBJ := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRC))
 
 $(BUILD)/n64emu: $(OBJ)
