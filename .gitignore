@@ -1,0 +1,21 @@
+# Build outputs
+core/build/
+*.o
+*.d
+
+# Game data never goes in the repository
+*.z64
+*.v64
+*.n64
+*.rom
+*.sav
+*.eep
+*.sra
+*.fla
+*.mpk
+
+# Run outputs and fetched third-party test ROMs (docs/TEST_ROMS.md)
+out/
+core/out/
+third_party/testroms/
+**/__pycache__/
