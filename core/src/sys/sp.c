@@ -5,6 +5,7 @@
 #include "sys.h"
 #include "../cpu/vr4300.h"
 #include "../rsp/rsp.h"
+#include "../hle/hle.h"
 
 // SP_STATUS bits (read view)
 #define SPS_HALT (1u << 0)
@@ -60,16 +61,55 @@ static void dma(bool toSp, u32 lenReg) {
 // completes tasks after a fixed time (no graphics, no audio).
 int g_rspMode = RSP_LLE;
 #define RSP_MAX_CYCLES 50000000ull  // a microcode that never reaches its BREAK
-static bool g_rspRunning, g_rspBroke, g_dpIntrPending;
+static bool g_rspRunning, g_rspBroke, g_dpIntrPending, g_hleDone;
 u64 g_rspTotalCycles;
 
 static void task_start(void) {
     g_taskType = m_r32(g_mem.spmem, 0xFC0);
     g_stats.spTasks[g_taskType & 7]++;
+    if (g_traceExc && g_taskType == 1 && g_stats.spTasks[1] == 1) {
+        // The graphics microcode's name: the "RSP ... " string in its data segment (OSTask ucode_data at DMEM 0xFD8)
+        u32 data = m_r32(g_mem.spmem, 0xFD8) & 0xFFFFFF, size = m_r32(g_mem.spmem, 0xFDC);
+        char s[96];
+        u32 n = 0;
+        for (u32 i = 0; i + 3 < size && i < 0x1000 && n == 0; i++)
+            if (m_r8(g_mem.rdram, data + i) == 'R' && m_r8(g_mem.rdram, data + i + 1) == 'S' && m_r8(g_mem.rdram, data + i + 2) == 'P')
+                for (; n < sizeof s - 1; n++) {
+                    u8 ch = m_r8(g_mem.rdram, data + i + n);
+                    if (ch < 32 || ch > 126) break;
+                    s[n] = (char)ch;
+                }
+        s[n] = 0;
+        fprintf(stderr, "  graphics microcode: text 0x%06x, data 0x%06x (%u bytes): \"%s\"\n",
+                (unsigned)(m_r32(g_mem.spmem, 0xFD0) & 0xFFFFFF), (unsigned)data, (unsigned)size, n ? s : "(no RSP string)");
+    }
+    if (g_hleGfx && g_taskType == 1) {
+        // High-level graphics microcode: the display list runs natively; the RDP's full sync interrupt and the
+        // microcode's HALT | BROKE | SIG2 come after an estimated run time, as with the interpreter.
+        u64 tris = g_hleStats.triangles;
+        g_rspRunning = true;
+        u64 t0 = host_ticks();
+        bool done = hle_gfx_task();
+        g_timeRsp += host_ticks() - t0;
+        g_rspRunning = false;
+        if (done) {
+            u64 ran = 2000 + hle_last_commands() * 40 + (g_hleStats.triangles - tris) * 150;
+            g_rspTotalCycles += ran;
+            g_rspBroke = g_hleDone = true;
+            sched_at(EV_SP_TASK, g_cpu.cycles + ran * 3 / 2 + 1);
+            return;
+        }
+    }
     if (g_rspMode == RSP_STUB) {
         u32 cycles = g_taskType == 1 ? TASK_CYCLES_GFX : g_taskType == 2 ? TASK_CYCLES_AUDIO : TASK_CYCLES_OTHER;
         sched_at(EV_SP_TASK, g_cpu.cycles + cycles);
         return;
+    }
+    bool compare = false;
+    if (g_hleCompare && g_taskType == 1) {  // HLE first from the same start, then the interpreter (src/hle/compare.c)
+        g_rspRunning = true;
+        compare = hle_compare_before();
+        g_rspRunning = g_dpIntrPending = false;
     }
     g_rsp.pc = g_pc & 0xFFC;
     g_rsp.inDelay = g_rsp.branchPending = false;
@@ -78,6 +118,7 @@ static void task_start(void) {
     u64 ran = rsp_run(RSP_MAX_CYCLES);
     g_timeRsp += host_ticks() - t0;
     g_rspRunning = false;
+    if (compare) hle_compare_after();
     g_rspTotalCycles += ran;
     g_pc = g_rsp.pc;
     g_rspBroke = g_rsp.halted;
@@ -94,9 +135,11 @@ static void task_start(void) {
 }
 
 void sp_task_done(void) {
-    if (g_rspMode == RSP_LLE) {
+    if (g_rspMode == RSP_LLE || g_hleDone) {  // the interpreter ran it, or the high-level microcode did
         if (g_rspBroke) {
             g_status |= SPS_HALT | SPS_BROKE;
+            if (g_hleDone) g_status |= SPS_SIG(2);  // what libultra's microcodes write before their BREAK
+            g_hleDone = false;
             if (g_status & SPS_IBREAK) mi_raise(MI_SP);
             g_rspBroke = false;
         }
@@ -154,7 +197,7 @@ void sp_write(u32 reg, u32 v, u32 mask) {
             break;
         }
         if (wasHalted && !(g_status & SPS_HALT)) task_start();
-        else if (!wasHalted && (g_status & SPS_HALT) && g_rspMode == RSP_STUB) sched_cancel(EV_SP_TASK);
+        else if (!wasHalted && (g_status & SPS_HALT) && g_rspMode == RSP_STUB) { sched_cancel(EV_SP_TASK); g_hleDone = g_rspBroke = false; }
         break;
     }
     case 0x1C: g_semaphore = 0; break;

@@ -34,7 +34,12 @@ but a PICA200 cannot reproduce the RDP bit for bit, so the proposal is three tie
 | RDP on the PICA | a software RDP on the PC | visual: within a stated tolerance per test, differences listed |
 
 The middle tier is what keeps HLE honest: the RSP's output (RDP commands, audio samples) is data that can be compared
-byte for byte, so the high-level microcode gets a real checker instead of "looks right".
+byte for byte, so the high-level microcode gets a real checker instead of "looks right". **Today (2026-10-25) the
+graphics HLE is checked per task by its pictures, not yet byte for byte:** `n64emu --gfx compare` runs every graphics
+task through the HLE and then through the interpreter from the same RDRAM and RDP state and compares the images both
+drew (depth images with a small tolerance). The HLE's transform, lighting and triangle setup are in float, so its
+edge and attribute values differ from the microcode's fixed point by small amounts; matching the command stream
+exactly needs the microcode's arithmetic (the F3DEX2 disassembly, Mr-Wiseguy/f3dex2, gives it) and is open.
 
 ## Machine model (core/src/sys)
 
@@ -57,15 +62,19 @@ IPL3 (its loader is not the 1 MB copy), and cartridges whose IPL3 is not in the 
 
 ## RSP plan
 
-1. A low-level RSP interpreter (scalar unit + vector unit), PC only, as the reference.
+1. A low-level RSP interpreter (scalar unit + vector unit), PC only, as the reference. **Done.**
 2. Graphics HLE for F3D / F3DEX / F3DEX2 (the bulk of the library), output: the RDP command stream, compared with (1).
+   **Built (src/hle/gfx.c),** with Wave Race's and GoldenEye's variants; compared per task by pictures (above).
 3. Audio HLE for the standard ABI, compared with (1) sample for sample.
 4. Then the special microcodes by measured demand (Rare's, Factor 5's, S2DEX).
 
 ## RDP / graphics plan
 
 The high-level graphics microcode produces triangles directly for the PICA (the RDP command stream exists for the
-checker, not as the 3DS path). Combiner and blender modes map to PICA combiner stages and blend state; textures
+checker, not as the 3DS path). **First version built (core/host3ds/rdp_pica.c, 2026-10-25):** the HLE hands clipped
+polygons with clip-space w to the renderer (`g_hleVtxSink`), the software RDP keeps following state and TMEM loads and
+hands over rectangles (`g_rdpGpu`); a render target per colour image, the combiner compiled to TEV stages
+(src/rdp/cc_pica.c, checked against the reference combiner by `n64emu --cc-check`), textures decoded from TMEM. Combiner and blender modes map to PICA combiner stages and blend state; textures
 (RGBA16/32, IA, I, CI4/CI8 with TLUT) convert to PICA formats through a TMEM model with a texture cache keyed by
 content. Framebuffer effects (the CPU reading the picture, copies into textures) are the known hard part: gc3ds's
 EFB-copy work is the closest precedent.

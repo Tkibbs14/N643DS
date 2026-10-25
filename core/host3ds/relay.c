@@ -172,6 +172,8 @@ bool relay_take_cmd(char* out, size_t n) {
     return true;
 }
 
+bool relay_frame_idle(void) { return g_frameHead == g_frameTail; }
+
 void relay_frame(const void* bmp, unsigned bytes) {
     if (!g_started || !g_jobId || g_frameHead != g_frameTail || !bytes) return;  // one at a time: busy, dropped
     if (!g_frameBuf || g_frameLen < bytes) {

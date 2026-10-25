@@ -6,6 +6,7 @@
 #include "../cpu/vr4300.h"
 #include "../jit/jit.h"
 #include "../rsp/rsp.h"
+#include "../hle/hle.h"
 void rdp_soft_reset(void);
 
 void mi_reset(void);
@@ -37,6 +38,7 @@ void sys_reset(void) {
     rsp_reset();
     rdp_reset();
     rdp_soft_reset();
+    hle_reset();
     vr_reset(&g_cpu);
     mi_reset();
     vi_reset();

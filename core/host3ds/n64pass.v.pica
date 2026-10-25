@@ -1,0 +1,29 @@
+; N643DS vertex shader (core/host3ds/rdp_pica.c): positions arrive in clip space from the CPU (the high-level
+; microcode transforms and clips). v0 position, v1 colour (u8 x 4), v2 texture coordinates in texels (s, t).
+; tc0 / tc1: per draw (scale s, scale t, offset s, offset t) from texels to each texture unit's coordinates.
+
+.fvec tc0, tc1
+
+.constf k(0.0, 1.0, 0.00392156862745098, 0.5)
+.alias  zeros  k.xxxx
+.alias  inv255 k.zzzz
+
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+
+.proc main
+	mov outpos, v0
+	mul outclr, inv255, v1
+	mov r0, v2
+	mul r1.xy, tc0.xy, r0.xy
+	add r1.xy, tc0.zw, r1.xy
+	mov r1.zw, zeros
+	mov outtc0, r1
+	mul r2.xy, tc1.xy, r0.xy
+	add r2.xy, tc1.zw, r2.xy
+	mov r2.zw, zeros
+	mov outtc1, r2
+	end
+.end

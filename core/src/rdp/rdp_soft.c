@@ -6,29 +6,45 @@
 // (core/tools/peterlemon.py, docs/TEST_ROMS.md).
 #include <string.h>
 #include "../sys/sys.h"
+#include "rdp.h"
 
-// ---- State --------------------------------------------------------------------------------------------------------
-typedef struct {
-    u32 fmt, size, line, tmem, palette;
-    u32 cms, cmt, masks, maskt, shifts, shiftt;  // cm: bit 0 mirror, bit 1 clamp
-    u32 sl, tl, sh, th;                          // 10.2
-} Tile;
-
-static struct {
-    u32 ciAddr, ciFmt, ciSize, ciWidth;          // colour image
-    u32 zAddr;
-    u32 tiAddr, tiFmt, tiSize, tiWidth;          // texture image
-    u32 sxh, syh, sxl, syl;                      // scissor, 10.2
-    u64 om;                                      // other modes
-    u64 combine;
-    u32 fill, prim, env, blend, fog;             // RGBA8888 colours (fill: raw)
-    u32 primLod, primMinLod, primZ;
-    Tile tiles[8];
-    u8 tmem[4096];
-} R;
+// ---- State (rdp.h) ------------------------------------------------------------------------------------------------
+RdpState g_rdp;
+const RdpGpu* g_rdpGpu;
+#define R g_rdp
+typedef RdpTile Tile;
 
 void rdp_soft_reset(void);
 void rdp_soft_reset(void) { memset(&R, 0, sizeof R); }
+
+// The colour images drawn to since rdp_ci_clear (for the HLE / interpreter comparison), with the lowest scissor seen
+// while each was current as its height; and the whole state, so a comparison can run a task twice from one start.
+RdpCi g_rdpCi[8];
+int g_rdpCiCount;
+static int g_ciCur = -1;
+static void ci_note(void) {
+    int k = 0;
+    while (k < g_rdpCiCount && g_rdpCi[k].addr != R.ciAddr) k++;
+    if (k == g_rdpCiCount) {
+        if (k == 8) { g_ciCur = -1; return; }
+        g_rdpCi[k] = (RdpCi){R.ciAddr, R.ciWidth, R.ciSize, 0};
+        g_rdpCiCount++;
+    }
+    g_ciCur = k;
+    if (R.syl >> 2 > g_rdpCi[k].height) g_rdpCi[k].height = R.syl >> 2;
+}
+void rdp_ci_clear(void) {
+    g_rdpCiCount = 0;
+    g_ciCur = -1;
+    if (R.ciWidth) ci_note();  // the image the task starts with
+}
+void* rdp_soft_state(u32* size) { *size = sizeof R; return &R; }
+u32 rdp_z_addr(void) { return R.zAddr; }
+u32 g_rdpOpCount[64];  // commands by opcode (the HLE / interpreter comparison clears and reads it)
+u64 g_rdpTriLog[16][22];  // the first triangles' edge words (likewise)
+int g_rdpTriLogN;
+u32 g_rdpTriLogId;  // only this triangle type (0: all)
+u64 g_rdpTriLogOm[16][2];  // the other modes and combiner each was drawn with
 
 #define OM(bit, n) ((u32)(R.om >> (bit)) & ((1u << (n)) - 1))
 enum { CYC1 = 0, CYC2 = 1, COPY = 2, FILL = 3 };
@@ -109,6 +125,8 @@ static u32 texel(const Tile* tl, int s, int t) {
     }
     }
 }
+u32 rdp_texel(int tile, int s, int t) { return texel(&R.tiles[tile & 7], s, t); }
+
 
 // One axis: shift, offset by the tile's start, clamp, mirror, mask. `c` is in 10.5 texel units; returns texels.
 static int wrap(int c, u32 shift, u32 lo, u32 hi, u32 cm, u32 mask, int* frac) {
@@ -205,6 +223,28 @@ static Col blend_cycle(int cyc, Col pix, Col mem, Col shade, bool final) {
     int den = A + B ? A + B : 1;
     Col o = {clamp8((P.r * A + M.r * B) / den), clamp8((P.g * A + M.g * B) / den), clamp8((P.b * A + M.b * B) / den), pix.a};
     return o;
+}
+
+// The combiner alone on given inputs with g_rdp's combine word, colours and cycle type (the PICA combiner's checker,
+// core/src/rdp/cc_check.c). Arrays are r, g, b, a.
+void rdp_combine_ref(const int t0[4], const int t1[4], const int shade[4], int out[4]) {
+    Col a = {t0[0], t0[1], t0[2], t0[3]}, b = {t1[0], t1[1], t1[2], t1[3]}, s = {shade[0], shade[1], shade[2], shade[3]};
+    Col zero = {0, 0, 0, 0};
+    u32 cyc = OM(52, 2);
+    Col c = combine_cycle(cyc == CYC2 ? 0 : 1, zero, a, b, s);
+    if (cyc == CYC2) c = combine_cycle(1, c, b, a, s);
+    out[0] = c.r; out[1] = c.g; out[2] = c.b; out[3] = c.a;
+}
+
+// Distinct (combine word, cycle type) pairs drawn with, for the checker (n64emu --cc-check)
+u64 g_rdpModes[512][2];
+int g_rdpModeN;
+static void note_mode(void) {
+    u32 cyc = OM(52, 2);
+    if (cyc >= COPY) return;
+    for (int i = g_rdpModeN - 1; i >= 0; i--)
+        if (g_rdpModes[i][0] == R.combine && g_rdpModes[i][1] == cyc) return;
+    if (g_rdpModeN < 512) { g_rdpModes[g_rdpModeN][0] = R.combine; g_rdpModes[g_rdpModeN][1] = cyc; g_rdpModeN++; }
 }
 
 // One pixel through the pipeline. Returns false when it is not written.
@@ -464,18 +504,23 @@ static void load_tlut(const u64 w) {
 void rdp_command(const u64* w, int n) {
     (void)n;
     u64 c = w[0];
+    g_rdpOpCount[(c >> 56) & 0x3F]++;
+    if (((c >> 56) & 0x38) == 0x08 && g_rdpTriLogN < 16 && (!g_rdpTriLogId || ((c >> 56) & 0x3F) == g_rdpTriLogId)) { g_rdpTriLogOm[g_rdpTriLogN][0] = R.om; g_rdpTriLogOm[g_rdpTriLogN][1] = R.combine; memcpy(g_rdpTriLog[g_rdpTriLogN++], w, (size_t)n * sizeof(u64)); }
     switch ((u32)(c >> 56) & 0x3F) {
     case 0x08: case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E: case 0x0F: {
         u32 id = (u32)(c >> 56) & 7;
         if (OM(52, 2) >= COPY && OM(52, 2) == FILL) break;  // triangles in fill mode: not drawn here
-        triangle(w, id & 4, id & 2, id & 1);
+        note_mode();
+        if (g_rdpGpu) g_rdpGpu->triangle(w, n);
+        else triangle(w, id & 4, id & 2, id & 1);
         break;
     }
-    case 0x24: tex_rect(w, false); break;
-    case 0x25: tex_rect(w, true); break;
+    case 0x24: if (g_rdpGpu) g_rdpGpu->tex_rect(w, false); else tex_rect(w, false); break;
+    case 0x25: if (g_rdpGpu) g_rdpGpu->tex_rect(w, true); else tex_rect(w, true); break;
     case 0x2D:  // SET_SCISSOR
         R.sxh = (u32)(c >> 44) & 0xFFF; R.syh = (u32)(c >> 32) & 0xFFF;
         R.sxl = (u32)(c >> 12) & 0xFFF; R.syl = (u32)c & 0xFFF;
+        if (g_ciCur >= 0) ci_note();
         break;
     case 0x2E: R.primZ = (u32)(c >> 16) & 0xFFFF; break;  // SET_PRIM_DEPTH
     case 0x2F: R.om = c; break;                            // SET_OTHER_MODES
@@ -496,7 +541,7 @@ void rdp_command(const u64* w, int n) {
         t->cms = (u32)(c >> 8) & 3; t->masks = (u32)(c >> 4) & 15; t->shifts = (u32)c & 15;
         break;
     }
-    case 0x36: fill_rect(c); break;
+    case 0x36: if (g_rdpGpu) g_rdpGpu->fill_rect(c); else fill_rect(c); break;
     case 0x37: R.fill = (u32)c; break;
     case 0x38: R.fog = (u32)c; break;
     case 0x39: R.blend = (u32)c; break;
@@ -511,6 +556,7 @@ void rdp_command(const u64* w, int n) {
     case 0x3F:  // SET_COLOR_IMAGE
         R.ciFmt = (u32)(c >> 53) & 7; R.ciSize = (u32)(c >> 51) & 3; R.ciWidth = ((u32)(c >> 32) & 0x3FF) + 1;
         R.ciAddr = (u32)c & 0x3FFFFFF;
+        ci_note();
         break;
     default: break;  // syncs, keys, convert
     }

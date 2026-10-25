@@ -32,3 +32,4 @@ void relay_flush(void);  // sends what the current job's log holds now (before a
 bool relay_take_cmd(char* out, size_t n);
 // Uploads a top-screen frame (a BMP in memory, copied) to the current job, from the relay thread.
 void relay_frame(const void* bmp, unsigned bytes);
+bool relay_frame_idle(void);  // no picture waiting to be sent (relay_frame drops pictures while one is)

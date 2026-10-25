@@ -4,6 +4,23 @@ Console measurements, newest first: relay jobs on the owner's New 2DS XL (`tools
 job's perf.csv (10 s rows; `speed_pct` is emulated time over real time). The RSP is still a stub (tasks complete
 after a fixed time, nothing is drawn), so these are CPU-side figures, not playable speed.
 
+## Graphics: HLE and the PICA renderer on the 2DS (2026-10-25, late)
+
+Super Mario 64, `--jit on`, settled speed in the title's Mario-head scene (the logos before it run at ~50%). Audio
+tasks are stubbed in every row (no audio HLE yet).
+
+| Job | Graphics | Speed (head scene) | Where the graphics time goes |
+|---|---|---|---|
+| 1451 | RSP interpreter + software RDP (`--rsp lle`) | ~3.6% | the reference path |
+| 1453 / 1454 | graphics HLE + software RDP (`--gfx hle`) | 6.0-12.3% | 46.2 s of 60 s in graphics tasks, of it 44.8 s rasterising (HLE geometry 1.4 s) |
+| 1461 | graphics HLE + PICA renderer (`--gfx hle --gpu on`) | 14.1-14.4% | 20.7 s of 40 s in the HLE and the GPU feed (8,402 draw calls, 157,741 triangles) |
+
+- The PICA path draws the title correctly (job 1461's pictures); its cost is now on the CPU side of the feed. The
+  first suspect is the texture lookup, which hashes up to 4 KB of TMEM per polygon and tile.
+- PC, per task against the interpreter at 600 fields (`--gfx compare`): clearly different pixels Super Mario 64
+  1.09%, Mario Kart 64 0.42%, Ocarina of Time 0.32%, Star Fox 64 0, Paper Mario 0.000%, Super Smash Bros. 0.60%,
+  Wave Race 64 0.58%, Dr. Mario 64 0.18%, Mario Party 0, Pilotwings 64 1.36%, GoldenEye 007 0.04%.
+
 ## The first JIT on the 2DS (2026-10-25)
 
 | Job | Build | Cartridge | Mode | Settled speed | MIPS |

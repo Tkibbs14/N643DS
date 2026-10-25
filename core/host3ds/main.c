@@ -20,6 +20,8 @@
 #include "../src/sys/sys.h"
 #include "../src/sys/system.h"
 #include "../src/jit/jit.h"
+#include "../src/hle/hle.h"
+#include "rdp_pica.h"
 
 #define ROM_DIR "sdmc:/n643ds/roms"
 #define PERF_PATH "sdmc:/n643ds/perf.csv"
@@ -33,6 +35,8 @@ static FILE* g_log;          // perf.csv, teed into the relay job when one runs
 static bool g_quitApp;
 static bool g_ranGame;       // a cartridge ran in this process (the next relay job restarts first, as gc3ds does)
 static int g_showEvery = 2;  // copy the VI picture to the top screen every N fields
+static bool g_gpuOk;         // citro3d set up (rdp_pica_init)
+static bool g_gpu;           // the RDP on the GPU for this run (--gpu on)
 static volatile bool g_stopRun, g_stopJob;  // live command "stop": this run, and the rest of the job
 static char g_isvLine[512];
 static size_t g_isvLen;
@@ -132,7 +136,13 @@ static void on_isv(const char* s, u32 n) {
 
 static u64 g_fieldMark;
 static void on_field(void) {
-    if (g_showEvery && g_stats.fields % (u64)g_showEvery == 0) show_picture();
+    if (!g_showEvery || g_stats.fields % (u64)g_showEvery) return;
+    if (g_gpu) {
+        u32 w = g_vi.width, vs = (g_vi.vStart >> 16) & 0x3FF, ve = g_vi.vStart & 0x3FF, lines = ve > vs ? (ve - vs) / 2 : 240;
+        u32 h = (g_vi.yScale & 0xFFF) ? lines * (g_vi.yScale & 0xFFF) / 1024 : 240;
+        if (w && w <= 1024 && h && h <= 1024 && rdp_pica_present(g_vi.origin & 0xFFFFFF, w, h)) return;
+    }
+    show_picture();
 }
 
 // The VI picture as a 24-bit BMP for the relay job (tools/relay.sh frames JOB): live command "shot", or every
@@ -156,6 +166,20 @@ static void send_frame(void) {
     memcpy(b + 18, &w, 4);
     memcpy(b + 22, &h, 4);
     b[26] = 1; b[28] = 24;
+    u8* gpu = NULL;
+    if (g_gpu && (gpu = malloc(w * h * 3)) && !rdp_pica_capture(gpu, w, h)) { free(gpu); gpu = NULL; }
+    if (gpu) {  // the GPU's picture (the first shot of a run only arms the read-back and sends RDRAM's)
+        for (u32 y = 0; y < h; y++)
+            for (u32 x = 0; x < w; x++) {
+                u8* o = b + 54 + (h - 1 - y) * stride + x * 3;
+                const u8* p = gpu + (y * w + x) * 3;
+                o[0] = p[2]; o[1] = p[1]; o[2] = p[0];
+            }
+        free(gpu);
+        relay_frame(b, size);
+        free(b);
+        return;
+    }
     for (u32 y = 0; y < h; y++) {
         u8* row = b + 54 + (h - 1 - y) * stride;
         for (u32 x = 0; x < w; x++) {
@@ -174,6 +198,32 @@ static void send_frame(void) {
     free(b);
 }
 
+
+static void pica_log(const char* line) { logf_("%s", line); }
+
+// Debugging (--texdump N): the GPU renderer's decoded textures as relay pictures (alpha shown as black)
+static void tex_dump(const u32* rgba, u32 w, u32 h, int tile) {
+    (void)tile;
+    u32 stride = (w * 3 + 3) & ~3u, size = 54 + stride * h;
+    u8* b = calloc(1, size);
+    if (!b) return;
+    b[0] = 'B'; b[1] = 'M';
+    memcpy(b + 2, &size, 4);
+    u32 v = 54; memcpy(b + 10, &v, 4);
+    v = 40; memcpy(b + 14, &v, 4);
+    memcpy(b + 18, &w, 4);
+    memcpy(b + 22, &h, 4);
+    b[26] = 1; b[28] = 24;
+    for (u32 y = 0; y < h; y++)
+        for (u32 x = 0; x < w; x++) {
+            u32 c = rgba[y * w + x];
+            u8* o = b + 54 + (h - 1 - y) * stride + x * 3;
+            o[0] = (u8)(c >> 8); o[1] = (u8)(c >> 16); o[2] = (u8)(c >> 24);
+        }
+    for (int i = 0; i < 300 && !relay_frame_idle(); i++) svcSleepThread(10000000);  // one picture at a time
+    relay_frame(b, size);
+    free(b);
+}
 static void apply_cmds(void) {
     char cmd[128];
     while (relay_take_cmd(cmd, sizeof cmd)) {
@@ -239,6 +289,19 @@ static const char* run_loaded(u32 seconds, bool interactive) {
               (unsigned long long)g_jitStats.fallbacks, (unsigned long long)g_jitStats.entries,
               (unsigned long long)g_jitStats.steps, (unsigned long long)g_jitStats.invalidations,
               (unsigned long long)g_jitStats.flushes);
+    if (g_hleGfx || g_rspMode == RSP_LLE)
+        logf_("# rsp %.2f s (rdp %.2f s); hle %llu tasks (%llu unknown), %llu commands, %llu triangles\n",
+              (double)g_timeRsp / g_hostTicksPerSec, (double)g_timeRdp / g_hostTicksPerSec,
+              (unsigned long long)g_hleStats.tasks, (unsigned long long)g_hleStats.unknown,
+              (unsigned long long)g_hleStats.commands, (unsigned long long)g_hleStats.triangles);
+    if (g_gpu)
+        logf_("# gpu: %llu draw calls, %llu triangles, %llu rectangles, %llu depth clears, %llu textures decoded, %llu presents, "
+              "%llu splits, %llu approximate draws, %llu interpreter triangles not drawn\n",
+              (unsigned long long)g_picaStats.drawCalls, (unsigned long long)g_picaStats.triangles,
+              (unsigned long long)g_picaStats.rects, (unsigned long long)g_picaStats.depthClears,
+              (unsigned long long)g_picaStats.texDecodes, (unsigned long long)g_picaStats.presents,
+              (unsigned long long)g_picaStats.splits, (unsigned long long)g_picaStats.approxDraws,
+              (unsigned long long)g_picaStats.lleTriangles);
     g_onIsv = NULL;
     g_onField = NULL;
     return "done";
@@ -246,6 +309,8 @@ static const char* run_loaded(u32 seconds, bool interactive) {
 
 static bool load_rom(const char* path) {
     if (!sys_init(8u << 20, SAVE_EEPROM4K)) { logf_("# out of memory for RDRAM\n"); return false; }
+    rdp_pica_reset();
+    rdp_pica_attach(g_gpu);
     if (!rom_load(path)) { logf_("# cannot load %s\n", path); return false; }
     return true;
 }
@@ -474,6 +539,12 @@ static void remote_mode(const char* selfPath) {
         if (opt_str(job.args, "--show", val, sizeof val)) g_showEvery = atoi(val);
         g_rspMode = RSP_STUB;
         if (opt_str(job.args, "--rsp", val, sizeof val) && !strcmp(val, "lle")) g_rspMode = RSP_LLE;
+        g_hleGfx = opt_str(job.args, "--gfx", val, sizeof val) && !strcmp(val, "hle");
+        g_gpu = g_gpuOk && g_hleGfx && opt_str(job.args, "--gpu", val, sizeof val) && !strcmp(val, "on");
+        g_picaTexDumpN = opt_str(job.args, "--texdump", val, sizeof val) ? atoi(val) : 0;
+        g_picaTexDump = tex_dump;
+        g_picaLogN = opt_str(job.args, "--drawlog", val, sizeof val) ? atoi(val) : 0;
+        g_picaLog = pica_log;
         g_shotSecs = 0;
         if (opt_str(job.args, "--shots", val, sizeof val)) g_shotSecs = (u32)strtoul(val, NULL, 10);
         g_jitEnabled = false;
@@ -532,9 +603,10 @@ static void menu(const char* selfPath) {
                     snprintf(path, sizeof path, ROM_DIR "/%s", g_roms[sel]);
                     consoleClear();
                     g_showEvery = 2;
-                    // By hand: the JIT, and the low-level RSP with the software renderer so the picture shows (slowly)
+                    // By hand: the JIT and the high-level graphics microcode (audio tasks are stubbed: no sound yet)
                     g_jitEnabled = jit_init();
-                    g_rspMode = RSP_LLE;
+                    g_rspMode = RSP_STUB;
+                    g_hleGfx = true;
                     if (load_rom(path)) run_loaded(0, true);
                 } else if (sel == g_nroms) {
                     consoleClear();
@@ -563,6 +635,7 @@ int main(int argc, char** argv) {
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     gfxSetDoubleBuffering(GFX_TOP, false);
     consoleInit(GFX_BOTTOM, &g_con);
+    g_gpuOk = rdp_pica_init();
     romfsInit();
     mkdir("sdmc:/n643ds", 0777);
     relay_reserve();

@@ -13,7 +13,7 @@ include $(DEVKITARM)/3ds_rules
 
 TARGET      := n643ds
 BUILD       := build
-SOURCES     := . ../src/cpu ../src/sys ../src/jit ../src/rsp ../src/rdp
+SOURCES     := . ../src/cpu ../src/sys ../src/jit ../src/rsp ../src/rdp ../src/hle
 DATA        :=
 INCLUDES    := .
 ROMFS       := romfs
@@ -28,8 +28,8 @@ CFLAGS   := -g -Wall -Wextra -Wno-unused-parameter -O2 -mword-relocations -ffunc
 CFLAGS   += $(INCLUDE) -D__3DS__ -D_GNU_SOURCE -std=gnu11 -frounding-math -ffp-contract=off
 CFLAGS   += $(EXTRA_CFLAGS)
 ASFLAGS  := -g $(ARCH)
-LDFLAGS   = -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
-LIBS     := -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru -lm
+LDFLAGS   = -specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) -Wl,--no-warn-execstack
+LIBS     := -lcitro3d -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru -lm
 LIBDIRS  := $(CTRULIB) $(PORTLIBS)
 
 #---------------------------------------------------------------------------------
@@ -43,10 +43,13 @@ export DEPSDIR  := $(CURDIR)/$(BUILD)
 
 CFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 SFILES      := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.S)))
+PICAFILES   := $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.v.pica)))
 export LD   := $(CC)
 
 export OFILES_SOURCES := $(CFILES:.c=.o) $(SFILES:.S=.o)
-export OFILES         := $(OFILES_SOURCES)
+export OFILES_BIN     := $(PICAFILES:.v.pica=.shbin.o)
+export OFILES         := $(OFILES_BIN) $(OFILES_SOURCES)
+export HFILES         := $(PICAFILES:.v.pica=_shbin.h)
 
 export INCLUDE  := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) $(foreach dir,$(LIBDIRS),-I$(dir)/include) -I$(CURDIR)/$(BUILD)
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib)
@@ -72,6 +75,16 @@ else
 
 $(OUTPUT).3dsx: $(OUTPUT).elf $(OUTPUT).smdh
 $(OUTPUT).elf: $(OFILES)
+$(OFILES_SOURCES): $(HFILES)
+
+%.shbin.o %_shbin.h : %.v.pica
+	@echo $(notdir $<)
+	$(eval CURBIN := $*.shbin)
+	picasso -o $(CURBIN) $<
+	bin2s $(CURBIN) | $(AS) -o $*.shbin.o
+	echo "extern const u8 $(subst .,_,$(CURBIN))_end[];" > $(subst .,_,$(CURBIN)).h
+	echo "extern const u8 $(subst .,_,$(CURBIN))[];" >> $(subst .,_,$(CURBIN)).h
+	echo "extern const u32 $(subst .,_,$(CURBIN))_size;" >> $(subst .,_,$(CURBIN)).h
 
 -include $(DEPSDIR)/*.d
 

@@ -30,8 +30,9 @@ its 3DS knowledge; gc3ds's `docs/FINDINGS.md`, `docs/research/` and `AGENTS.md` 
 | `core/src/sys/` | `bus.c` (memory map, cartridge, ISViewer), `sched.c`, `mi.c`, `vi.c`, `ai.c`, `pi.c`, `si.c` (PIF joybus), `sp.c` (SP interface, RSP task timing, RDP registers), `ri.c`, `rom.c` (loading, CIC, high-level boot), `system.c` (reset, main loop) |
 | `core/src/jit/` | VR4300 -> ARMv6K JIT, exact against the interpreter (`arm_emit.h` from gc3ds) |
 | `core/src/rsp/` | RSP interpreter: scalar unit (`rsp.c`), vector unit and vector loads / stores (`rsp_vu.c`) |
-| `core/src/rdp/` | RDP command stream (`rdp.c`) and the software renderer into RDRAM (`rdp_soft.c`) |
-| `core/host3ds/` | the 3DS program: menu, display, relay client (from gc3ds), JIT host services |
+| `core/src/rdp/` | RDP command stream (`rdp.c`), the software renderer into RDRAM (`rdp_soft.c`, state shared through `rdp.h`), the combiner as PICA TEV stages (`cc_pica.c`) and its checker (`cc_check.c`) |
+| `core/src/hle/` | high-level graphics microcode (`gfx.c`: F3D, F3DEX, F3DEX2 / F3DZEX and variants) and its per-task comparison with the interpreter (`compare.c`) |
+| `core/host3ds/` | the 3DS program: menu, display, relay client (from gc3ds), JIT host services, the RDP on the PICA200 (`rdp_pica.c`, `n64pass.v.pica`) |
 | `core/tools/` | `arm_build.sh` / `jit_check.sh` (the JIT under qemu-arm), `peterlemon.py` (hardware-captured test ROMs), `contact.py` |
 | `tools/relay.sh` | remote 2DS runs (`@n643ds` jobs) |
 | `core/src/host/pc_main.c` | PC frontend: headless runs, ISViewer text, VI pictures as PPM, statistics |
@@ -51,6 +52,8 @@ n32 test programs), `qemu-mipsn32` (`qemu-user`), Python 3. devkitARM (`/opt/dev
 | Machine model (`core/src/sys/`) | `make -C core` with no warnings; the CPU suite; the hardware-derived suites once fetched |
 | JIT (`core/src/jit/`) | `bash core/tools/jit_check.sh` (CPU test cartridges identical with and without the JIT), `jit_check.sh plant` (plant 6 caught), and `FIELDS=60 jit_check.sh GAMES` (end states identical) |
 | RSP / RDP | `python3 core/tools/peterlemon.py third_party/testroms/peterlemon/RSPTest` (and `RDP`): no picture that matched the hardware capture may stop matching |
+| Graphics HLE (`core/src/hle/`) | `n64emu ROM --fields 600 --gfx compare --stats` over the games in `docs/HANDOFF.md` (per task, HLE against the interpreter from the same state): no game's "clearly different" share or count of tasks over 1% may grow. `N64_HLE_DUMPDIR=dir` writes differing tasks' pictures; `N64_HLE_CMPLOG=1` logs each task, `N64_HLE_TRACE=task` its commands |
+| PICA combiner (`core/src/rdp/cc_pica.c`) | `n64emu ROM --fields 600 --gfx hle --cc-check` (every mode the run drew with: 0 "exact but differing") and with `N64_CC_PLANT=1` (must report differences) |
 | Anything | `make -C core` and `bash core/host3ds/build.sh` with no new warnings |
 
 ## Code style

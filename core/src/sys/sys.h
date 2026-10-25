@@ -145,6 +145,17 @@ void rdp_process(u32 start, u32 end, bool xbus);
 void rdp_reset(void);
 typedef struct { u64 commands, triangles, rects, fills, syncFull, bytes; } RdpStats;
 extern RdpStats g_rdpStats;
+typedef struct { u32 addr, width, size, height; } RdpCi;  // a colour image drawn to (rdp_soft.c)
+extern RdpCi g_rdpCi[8];
+extern int g_rdpCiCount;
+void rdp_ci_clear(void);
+void* rdp_soft_state(u32* size);
+u32 rdp_z_addr(void);
+extern u32 g_rdpOpCount[64];
+extern u64 g_rdpTriLog[16][22];
+extern int g_rdpTriLogN;
+extern u32 g_rdpTriLogId;
+extern u64 g_rdpTriLogOm[16][2];
 
 // Host time, for profiling (each frontend provides it): ticks, and ticks a second
 u64 host_ticks(void);

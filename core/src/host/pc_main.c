@@ -12,6 +12,8 @@
 #include "../sys/sys.h"
 #include "../sys/system.h"
 #include "../jit/jit.h"
+#include "../hle/hle.h"
+int cc_check(void);
 
 static u64 g_maxFields = 600;
 static const char* g_outDir;
@@ -99,7 +101,7 @@ int main(int argc, char** argv) {
     u64 trace = 0, traceFrom = 0;
     int saveType = SAVE_EEPROM4K, cic = 0;
     u32 rdram = 8u << 20;
-    bool stats = false, useJit = false, hash = false, sliceFields = false;
+    bool stats = false, useJit = false, hash = false, sliceFields = false, ccCheck = false;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         bool more = i + 1 < argc;
@@ -119,7 +121,9 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--stats")) stats = true;
         else if (!strcmp(a, "--jit")) useJit = true;
         else if (!strcmp(a, "--hash")) hash = true;
+        else if (!strcmp(a, "--cc-check")) ccCheck = true;
         else if (!strcmp(a, "--slice")) sliceFields = true;
+        else if (!strcmp(a, "--gfx") && more) { i++; g_hleGfx = !strcmp(argv[i], "hle"); g_hleCompare = !strcmp(argv[i], "compare"); }
         else if (!strcmp(a, "--rsp") && more) g_rspMode = !strcmp(argv[++i], "stub") ? RSP_STUB : RSP_LLE;
         else if (a[0] != '-' && !romPath) romPath = a;
         else { fprintf(stderr, "unknown option %s\n", a); return 2; }
@@ -178,6 +182,17 @@ int main(int argc, char** argv) {
             fprintf(stderr, "rsp: %.2f s (rdp %.2f s of it), %llu rdp commands, %llu triangles\n",
                     (double)g_timeRsp / g_hostTicksPerSec, (double)g_timeRdp / g_hostTicksPerSec,
                     (unsigned long long)g_rdpStats.commands, (unsigned long long)g_rdpStats.triangles);
+        if (g_hleGfx)
+            fprintf(stderr, "gfx hle: %llu tasks (%llu on the interpreter: unknown microcode), %llu commands, %llu triangles\n",
+                    (unsigned long long)g_hleStats.tasks, (unsigned long long)g_hleStats.unknown,
+                    (unsigned long long)g_hleStats.commands, (unsigned long long)g_hleStats.triangles);
+        if (g_hleCompare && g_hleCmp.tasks)
+            fprintf(stderr, "gfx compare: %llu tasks, %llu identical, %llu over 1%% clearly different; %.3f%% of pixels differ, "
+                            "%.3f%% clearly; depth %.3f%% off by over 4\n", (unsigned long long)g_hleCmp.tasks,
+                    (unsigned long long)g_hleCmp.identical, (unsigned long long)g_hleCmp.bad,
+                    100.0 * (double)g_hleCmp.diff / (double)(g_hleCmp.pixels + !g_hleCmp.pixels),
+                    100.0 * (double)g_hleCmp.big / (double)(g_hleCmp.pixels + !g_hleCmp.pixels),
+                    100.0 * (double)g_hleCmp.zDiff / (double)(g_hleCmp.zPixels + !g_hleCmp.zPixels));
         if (g_jitEnabled)
             fprintf(stderr, "jit: %llu compiles (%llu instructions, %llu through the interpreter), %llu block entries, "
                             "%llu interpreter steps, %llu invalidations, %llu flushes, %llu idle cycles skipped\n",
@@ -219,6 +234,7 @@ int main(int argc, char** argv) {
         printf("state cycles %llu pc %08x regs %016llx all %016llx\n", (unsigned long long)g_cpu.cycles, (u32)g_cpu.pc,
                (unsigned long long)regs, (unsigned long long)h);
     }
+    if (ccCheck && cc_check()) return 4;  // the PICA combiner against the reference (src/rdp/cc_check.c)
     if (g_untilIsv) {
         if (g_isvResult < 0) { fprintf(stderr, "no PASS / FAIL line before the limit\n"); return 3; }
         return g_isvResult;
