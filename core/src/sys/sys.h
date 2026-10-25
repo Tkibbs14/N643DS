@@ -145,3 +145,8 @@ void rdp_process(u32 start, u32 end, bool xbus);
 void rdp_reset(void);
 typedef struct { u64 commands, triangles, rects, fills, syncFull, bytes; } RdpStats;
 extern RdpStats g_rdpStats;
+
+// Host time, for profiling (each frontend provides it): ticks, and ticks a second
+u64 host_ticks(void);
+extern u64 g_hostTicksPerSec;
+extern u64 g_timeRsp, g_timeRdp;  // host ticks in the RSP interpreter (RDP included) and in the RDP

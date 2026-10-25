@@ -573,3 +573,6 @@ int main(int argc, char** argv) {
     gfxExit();
     return 0;
 }
+
+u64 g_hostTicksPerSec = SYSCLOCK_ARM11;
+u64 host_ticks(void) { return svcGetSystemTick(); }

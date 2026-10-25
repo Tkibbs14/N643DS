@@ -41,6 +41,7 @@ static u64 read_word(u32 a, bool xbus) {
 }
 
 void rdp_process(u32 start, u32 end, bool xbus) {
+    u64 t0 = host_ticks();
     for (u32 a = start; a < end; a += 8) {
         u64 w = read_word(a, xbus);
         g_rdpStats.bytes += 8;
@@ -58,4 +59,5 @@ void rdp_process(u32 start, u32 end, bool xbus) {
         }
         g_have = 0;
     }
+    g_timeRdp += host_ticks() - t0;
 }

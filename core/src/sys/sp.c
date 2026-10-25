@@ -74,7 +74,9 @@ static void task_start(void) {
     g_rsp.pc = g_pc & 0xFFC;
     g_rsp.inDelay = g_rsp.branchPending = false;
     g_rspRunning = true;
+    u64 t0 = host_ticks();
     u64 ran = rsp_run(RSP_MAX_CYCLES);
+    g_timeRsp += host_ticks() - t0;
     g_rspRunning = false;
     g_rspTotalCycles += ran;
     g_pc = g_rsp.pc;

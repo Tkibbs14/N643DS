@@ -7,6 +7,7 @@ Mem g_mem;
 Pad g_pad[4];
 SysStats g_stats;
 u8 g_codePage[RDRAM_MAX >> 12];
+u64 g_timeRsp, g_timeRdp;
 void (*g_onField)(void);
 void (*g_onIsv)(const char* s, u32 n);
 void (*g_onAudio)(const s16* lr, u32 frames, u32 rate);

@@ -174,6 +174,10 @@ int main(int argc, char** argv) {
                 (unsigned long long)(g_stats.spTasks[0] + g_stats.spTasks[3] + g_stats.spTasks[4] + g_stats.spTasks[5] +
                                      g_stats.spTasks[6] + g_stats.spTasks[7]),
                 (unsigned long long)g_stats.piDmas, (unsigned long long)g_stats.siDmas, (unsigned long long)g_stats.aiBufs);
+        if (g_rspMode == RSP_LLE)
+            fprintf(stderr, "rsp: %.2f s (rdp %.2f s of it), %llu rdp commands, %llu triangles\n",
+                    (double)g_timeRsp / g_hostTicksPerSec, (double)g_timeRdp / g_hostTicksPerSec,
+                    (unsigned long long)g_rdpStats.commands, (unsigned long long)g_rdpStats.triangles);
         if (g_jitEnabled)
             fprintf(stderr, "jit: %llu compiles (%llu instructions, %llu through the interpreter), %llu block entries, "
                             "%llu interpreter steps, %llu invalidations, %llu flushes, %llu idle cycles skipped\n",
@@ -220,4 +224,11 @@ int main(int argc, char** argv) {
         return g_isvResult;
     }
     return 0;
+}
+
+u64 g_hostTicksPerSec = 1000000000ull;
+u64 host_ticks(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
 }
