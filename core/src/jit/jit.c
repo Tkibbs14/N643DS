@@ -45,6 +45,7 @@ typedef struct {
     u32 n;      // guest instructions, for the budget check
     u32 va;     // the guest address it was compiled for (TLB-mapped code: a physical page may appear at several)
     bool idle;  // a branch to itself with a NOP in its delay slot: fast-forwarded to the next event
+    u8 cop1;    // 0: no FPU translated; 1 / 2: compiled for CU1 set and FR 0 / 1 (recompiled if that changes)
 } Block;
 
 static u32* g_code;
@@ -106,7 +107,14 @@ typedef struct {
     u32 va0, n;        // the block's first guest address and length
     u32 exits[512];    // branches to the shared return (helper said: leave)
     u32 nexits;
+    bool cu1, fr;      // Status.CU1 / FR when compiled: FPU moves and memory are translated only with CU1 set
+    bool usedCop1;     // the block depends on them (Block.cop1)
 } Ctx;
+
+#define OFF_FPR(r) ((u32)(offsetof(Vr, fpr) + 8u * (r)))
+// The 32-bit view of FPR r and the 64-bit view, for the FR mode compiled for (vr4300_fpu.c's register file views)
+static u32 off_fpr_w(const Ctx* x, int r) { return x->fr ? OFF_FPR(r) : OFF_FPR(r & ~1) + 4u * (r & 1); }
+static u32 off_fpr_d(const Ctx* x, int r) { return x->fr ? OFF_FPR(r) : OFF_FPR(r & ~1); }
 
 static void ldrsb_reg(Emit* e, int rt, int rn, int rm) { E(e, cc(C_AL) | 0x019000D0u | ((u32)rn << 16) | ((u32)rt << 12) | (u32)rm); }
 static void ldrb_lsr12(Emit* e, int rt, int rn, int rm) {  // ldrb rt, [rn, rm, lsr #12]
@@ -253,9 +261,10 @@ static void emit_mem(Ctx* x, u32 op, u32 i, bool inDelay) {
     u32 prim = op >> 26;
     int rt = (op >> 16) & 31;
     static const int sizes[64] = {[0x20] = 1, [0x24] = 1, [0x21] = 2, [0x25] = 2, [0x23] = 4, [0x27] = 4, [0x37] = 8,
-                                  [0x28] = 1, [0x29] = 2, [0x2B] = 4, [0x3F] = 8};
+                                  [0x28] = 1, [0x29] = 2, [0x2B] = 4, [0x3F] = 8, [0x31] = 4, [0x35] = 8, [0x39] = 4,
+                                  [0x3D] = 8};
     int size = sizes[prim];
-    bool store = (prim >= 0x28 && prim <= 0x2B) || prim == 0x3F;  // LD (0x37) is a load
+    bool store = (prim >= 0x28 && prim <= 0x2B) || prim == 0x3F || prim == 0x39 || prim == 0x3D;  // LD (0x37) loads
     u32 slow[8];
     u32 ns = emit_address(x, op, size, store, slow);
     if (!store) {
@@ -268,6 +277,17 @@ static void emit_mem(Ctx* x, u32 op, u32 i, bool inDelay) {
                    stg(e, rt, 0, R3); load_const(e, R12, 0); stg(e, rt, 1, R12); break;
         case 0x23: ldr_reg(e, R3, R10, R2); st32(e, rt, R3, R12); break;                                     // LW
         case 0x27: ldr_reg(e, R3, R10, R2); stg(e, rt, 0, R3); load_const(e, R12, 0); stg(e, rt, 1, R12); break;  // LWU
+        case 0x31:                                                                                           // LWC1
+            ldr_reg(e, R3, R10, R2);
+            str_imm(e, R3, R11, off_fpr_w(x, rt));
+            break;
+        case 0x35:                                                                                           // LDC1
+            dp_reg(e, ADD, 0, R2, R2, R10);
+            ldr_imm(e, R3, R2, 0);
+            ldr_imm(e, R12, R2, 4);
+            str_imm(e, R12, R11, off_fpr_d(x, rt));
+            str_imm(e, R3, R11, off_fpr_d(x, rt) + 4);
+            break;
         default:                                                                                             // LD
             dp_reg(e, ADD, 0, R2, R2, R10);
             ldr_imm(e, R3, R2, 0);
@@ -280,6 +300,14 @@ static void emit_mem(Ctx* x, u32 op, u32 i, bool inDelay) {
         case 0x28: ldg(e, R3, rt, 0); dp_imm(e, EOR, 0, R2, R2, 3); strb_reg(e, R3, R10, R2); break;  // SB
         case 0x29: ldg(e, R3, rt, 0); dp_imm(e, EOR, 0, R2, R2, 2); strh_reg(e, R3, R10, R2); break;  // SH
         case 0x2B: ldg(e, R3, rt, 0); str_reg(e, R3, R10, R2); break;                                 // SW
+        case 0x39: ldr_imm(e, R3, R11, off_fpr_w(x, rt)); str_reg(e, R3, R10, R2); break;            // SWC1
+        case 0x3D:                                                                                    // SDC1
+            dp_reg(e, ADD, 0, R2, R2, R10);
+            ldr_imm(e, R3, R11, off_fpr_d(x, rt) + 4);
+            str_imm(e, R3, R2, 0);
+            ldr_imm(e, R3, R11, off_fpr_d(x, rt));
+            str_imm(e, R3, R2, 4);
+            break;
         default:                                                                                      // SD
             dp_reg(e, ADD, 0, R2, R2, R10);
             ldg(e, R3, rt, 1);
@@ -307,11 +335,13 @@ static bool is_branch(u32 op) {
 // N64_JIT_OFF=mask (debugging): instruction classes sent to the interpreter instead of translated, to find which
 // translation differs. 1 SLL/SRL/SRA, 2 HI/LO moves, 4 MULT(U), 8 ADDU/SUBU, 16 AND/OR/XOR/NOR, 32 SLT(U),
 // 64 DADDU/DSUBU, 128 64-bit shifts, 256 ADDIU/DADDIU, 512 SLTI(U), 1024 ANDI/ORI/XORI, 2048 LUI, 4096 loads,
-// 8192 stores.
+// 8192 stores, 16384 LW / LWU, 32768 LD, 65536 trapping add / sub, 131072 variable shifts, 262144 FPU moves and memory.
 static u32 op_class(u32 op) {
     u32 p = op >> 26, f = op & 63;
     if (p == 0) {
         if (f <= 3) return 1;
+        if (f == 4 || f == 6 || f == 7) return 131072;
+        if (f == 0x20 || f == 0x22 || f == 0x2C || f == 0x2E) return 65536;
         if (f >= 0x10 && f <= 0x13) return 2;
         if (f == 0x18 || f == 0x19) return 4;
         if (f == 0x21 || f == 0x23) return 8;
@@ -321,6 +351,8 @@ static u32 op_class(u32 op) {
         if (f >= 0x38) return 128;
         return 0;
     }
+    if (p == 0x08 || p == 0x18) return 65536;
+    if (p == 0x11 || p == 0x31 || p == 0x35 || p == 0x39 || p == 0x3D) return 262144;
     if (p == 0x09 || p == 0x19) return 256;
     if (p == 0x0A || p == 0x0B) return 512;
     if (p >= 0x0C && p <= 0x0E) return 1024;
@@ -360,6 +392,42 @@ static void emit_insn(Ctx* x, u32 op, u32 i, bool inDelay) {
             }
             st32(e, rd, R0, R1);
             return;
+        case 0x04: case 0x06: case 0x07:  // SLLV / SRLV / SRAV (amount: rs & 31)
+            if (!rd) return;
+            ldg(e, R0, rt, 0);
+            ldg(e, R2, rs, 0);
+            dp_imm(e, AND, 0, R2, R2, 31);
+            if ((op & 63) == 0x07) {  // SRAV: the whole 64-bit register shifts, the low word is kept (vr4300.c)
+                ldg(e, R1, rt, 1);
+                dp_rsr(e, MOV, 0, R0, 0, R0, LSR, R2);
+                dp_imm(e, RSB, 0, R3, R2, 32);
+                dp_rsr(e, ORR, 0, R0, R0, R1, LSL, R3);  // a register shift by 32 gives 0: amount 0 keeps rt
+            } else {
+                dp_rsr(e, MOV, 0, R0, 0, R0, (op & 2) ? LSR : LSL, R2);
+            }
+            st32(e, rd, R0, R1);
+            return;
+        case 0x20: case 0x22: case 0x2C: case 0x2E: {  // ADD / SUB / DADD / DSUB: overflow goes to the interpreter
+            bool dbl = (op & 63) >= 0x2C, sub = (op & 2) != 0;
+            ldg(e, R0, rs, 0);
+            ldg(e, R2, rt, 0);
+            if (dbl) {
+                ldg(e, R1, rs, 1);
+                ldg(e, R3, rt, 1);
+                dp_reg(e, sub ? SUB : ADD, 1, R0, R0, R2);
+                dp_reg(e, sub ? SBC : ADC, 1, R1, R1, R3);
+            } else {
+                dp_reg(e, sub ? SUB : ADD, 1, R0, R0, R2);
+            }
+            u32 ov = branch_c(e, C_VS, 0);
+            if (dbl) st64(e, rd, R0, R1);
+            else st32(e, rd, R0, R1);
+            u32 done = branch_c(e, C_AL, 0);
+            patch_branch(e, ov, e->n);
+            emit_fallback(x, op, i, inDelay);
+            patch_branch(e, done, e->n);
+            return;
+        }
         case 0x0F: return;  // SYNC
         case 0x10: case 0x12:  // MFHI / MFLO
             if (!rd) return;
@@ -464,6 +532,57 @@ static void emit_insn(Ctx* x, u32 op, u32 i, bool inDelay) {
         return;
     }
     switch (prim) {
+    case 0x08: case 0x18: {  // ADDI / DADDI: overflow goes to the interpreter
+        bool dbl = prim == 0x18;
+        ldg(e, R0, rs, 0);
+        imm_op(e, ADD, 1, R0, R0, simm, R2);
+        if (dbl) {
+            ldg(e, R1, rs, 1);
+            load_const(e, R3, sx_hi(simm));
+            dp_reg(e, ADC, 1, R1, R1, R3);
+        }
+        u32 ov = branch_c(e, C_VS, 0);
+        if (dbl) st64(e, rt, R0, R1);
+        else st32(e, rt, R0, R1);
+        u32 done = branch_c(e, C_AL, 0);
+        patch_branch(e, ov, e->n);
+        emit_fallback(x, op, i, inDelay);
+        patch_branch(e, done, e->n);
+        return;
+    }
+    case 0x11: {  // COP1 moves, with CU1 set when compiled (otherwise the interpreter raises CpU)
+        u32 fmt = (op >> 21) & 31;
+        if (!x->cu1 || (fmt != 0 && fmt != 1 && fmt != 4 && fmt != 5)) break;
+        x->usedCop1 = true;
+        switch (fmt) {
+        case 0:  // MFC1
+            if (!rt) return;
+            ldr_imm(e, R0, R11, off_fpr_w(x, rd));
+            st32(e, rt, R0, R1);
+            return;
+        case 1:  // DMFC1
+            if (!rt) return;
+            ldr_imm(e, R0, R11, off_fpr_d(x, rd));
+            ldr_imm(e, R1, R11, off_fpr_d(x, rd) + 4);
+            st64(e, rt, R0, R1);
+            return;
+        case 4:  // MTC1
+            ldg(e, R0, rt, 0);
+            str_imm(e, R0, R11, off_fpr_w(x, rd));
+            return;
+        default:  // DMTC1
+            ldg(e, R0, rt, 0);
+            ldg(e, R1, rt, 1);
+            str_imm(e, R0, R11, off_fpr_d(x, rd));
+            str_imm(e, R1, R11, off_fpr_d(x, rd) + 4);
+            return;
+        }
+    }
+    case 0x31: case 0x35: case 0x39: case 0x3D:  // LWC1 / LDC1 / SWC1 / SDC1
+        if (!x->cu1) break;
+        x->usedCop1 = true;
+        emit_mem(x, op, i, inDelay);
+        return;
     case 0x09:  // ADDIU
         if (!rt) return;
         ldg(e, R0, rs, 0);
@@ -597,7 +716,7 @@ static void emit_branch(Ctx* x, u32 op, u32 i, u32 slotOp) {
 }
 
 // ---- Compiling a block ---------------------------------------------------------------------------------------------
-static Block* compile(u32 va, u32 pa) {
+static Block* compile(const Vr* c, u32 va, u32 pa) {
     u32 n = 0, br = MAX_INSNS;
     // A block stays inside its 4 KB page: at a TLB-mapped address the next virtual page can map anywhere.
     u32 room = (0x1000 - (pa & 0xFFF)) / 4;
@@ -624,6 +743,8 @@ static Block* compile(u32 va, u32 pa) {
         x.e.cap = g_codeCap - g_codeUsed;
         x.va0 = va;
         x.n = n;
+        x.cu1 = (c->cop0[C0_STATUS] & ST_CU1) != 0;
+        x.fr = (c->cop0[C0_STATUS] & ST_FR) != 0;
         Emit* e = &x.e;
         push_regs(e, (1u << R4) | (1u << R5) | (1u << R6) | (1u << R7) | (1u << R8) | (1u << R9) | (1u << R10) |
                          (1u << R11) | (1u << LR));
@@ -646,6 +767,7 @@ static Block* compile(u32 va, u32 pa) {
         b->n = n;
         b->va = va;
         b->idle = false;
+        b->cop1 = x.usedCop1 ? (x.fr ? 2 : 1) : 0;
         if (n == 2 && br == 0 && m_r32(g_mem.rdram, pa + 4) == 0) {  // `b .` / `j .` with a NOP: an idle loop
             u32 op = m_r32(g_mem.rdram, pa), prim = op >> 26;
             bool selfB = prim == 4 && ((op >> 21) & 31) == ((op >> 16) & 31) && (op & 0xFFFF) == 0xFFFF;
@@ -683,6 +805,10 @@ void jit_run(Vr* c, u64 untilCycles) {
         if (!page) page = g_map[pa >> 12] = calloc(1024, sizeof(Block*));
         Block* b = page ? page[(pa & 0xFFF) >> 2] : NULL;
         if (b && b->code && b->va != a) b = NULL;  // the page is mapped at another address now: compile for this one
+        if (b && b->cop1) {  // compiled for CU1 set and an FR mode: recompile when either changed
+            u32 st = (u32)c->cop0[C0_STATUS];
+            if (!(st & ST_CU1) || ((st & ST_FR) != 0) != (b->cop1 == 2)) b = NULL;
+        }
         if (b && b->idle) {
             // The interpreter would run the loop until the event; registers do not change, only time does.
             u64 iters = (g_vrRunUntil - c->cycles) / 2;
@@ -698,7 +824,7 @@ void jit_run(Vr* c, u64 untilCycles) {
                 g_jitStats.steps++;
                 continue;
             }
-            b = compile(a, pa);
+            b = compile(c, a, pa);
             if (page) page[(pa & 0xFFF) >> 2] = b;
         }
         if (!b->code || c->cycles + b->n > g_vrRunUntil) {
