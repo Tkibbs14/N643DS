@@ -1,6 +1,7 @@
 // Peripheral Interface: cartridge DMA. Data moves at the write; the busy time and interrupt follow a flat cost per
 // byte (an approximation of the domain timing registers, docs/DESIGN.md "Timing").
 #include "sys.h"
+#include <stdio.h>
 #include "../cpu/vr4300.h"
 
 static u32 g_dramAddr, g_cartAddr, g_status;
@@ -70,6 +71,7 @@ void pi_write(u32 reg, u32 v, u32 mask) {
     case 0x0C: {  // WR_LEN: cartridge to RDRAM
         u32 len = (v & 0xFFFFFF) + 1;
         u32 off = g_cartAddr - 0x10000000u;
+        if (g_traceExc) fprintf(stderr, "  PI DMA cart 0x%08x -> RDRAM 0x%06x, %u bytes\n", g_cartAddr, g_dramAddr, len);
         if (g_cartAddr >= 0x10000000u && off + len <= g_mem.romSize && g_dramAddr + len <= g_mem.rdramSize) {
             m_copy(g_mem.rdram, g_dramAddr, g_mem.rom, off, len);
         } else {

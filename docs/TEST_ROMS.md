@@ -1,19 +1,19 @@
 # Test programs
 
 No commercial game data is ever part of this repository: no ROMs, no save files of commercial games, no PIF ROM.
-Game tests take a cartridge image the user owns through `U64_ROM` (planned) or the command line.
+Game tests take a cartridge image the user owns through `N64_ROM` (planned) or the command line.
 
 ## Our CPU suite (core/tests/cpu)
 
 `bash core/tests/cpu/run_tests.sh` builds each test twice from one C source (big-endian n32, `mipsel-linux-gnu-gcc
--EB`): as a cartridge for u64emu, and as a Linux program for `qemu-mipsn32 -cpu R4000`.
+-EB`): as a cartridge for n64emu, and as a Linux program for `qemu-mipsn32 -cpu R4000`.
 
 - **OUT lines** are architectural results, hashed per group. They must match qemu. 32-bit instructions get
   sign-extended operands there, since other inputs are UNPREDICTABLE in MIPS III; FPU operands and results stay
   normal, since the VR4300 traps on denormals.
 - **EXPECT lines** state a value. They cover VR4300-specific behaviour and exceptions, which only the cartridge build
   can take. Where the value comes from ares rather than the VR4300 manual, the test says so.
-- `bash core/tests/cpu/run_tests.sh plant` runs each planted interpreter bug (`U64_PLANT`, `cpu/vr4300.h`); every one
+- `bash core/tests/cpu/run_tests.sh plant` runs each planted interpreter bug (`N64_PLANT`, `cpu/vr4300.h`); every one
   must fail its test.
 
 | Test | Covers | Groups / checks |
@@ -35,10 +35,10 @@ reference for VR4300, RSP and RDP behaviour. They need the owner's approval to d
 checked first), go in an ignored directory, and are fetched by a script, never committed.
 
 - **n64-systemtest** (github.com/lemmy-64/n64-systemtest): CPU, COP0, COP1, TLB, exceptions, RSP; reports through
-  ISViewer, which u64emu prints.
+  ISViewer, which n64emu prints.
 - **PeterLemon/N64** (github.com/PeterLemon/N64): CPU, RSP and RDP tests with reference pictures.
 - Others to evaluate when the RSP and RDP work starts (RDP test suites with captured hardware output).
 
-Both need the cartridge's own IPL3 or a boot that tolerates it; u64emu's high-level boot copies the first megabyte to
+Both need the cartridge's own IPL3 or a boot that tolerates it; n64emu's high-level boot copies the first megabyte to
 the header's entry point, which suits ROMs built with a standard IPL3. libdragon's open IPL3 needs the IPL3 path
 (DESIGN.md "Boot").

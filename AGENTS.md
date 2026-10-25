@@ -1,9 +1,9 @@
-# AGENTS.md: working on ultra3ds
+# AGENTS.md: working on N643DS
 
 For people and coding agents. Read this whole file before changing anything, then `docs/HANDOFF.md` (the state) and
 `docs/DESIGN.md` (the plan).
 
-ultra3ds is an N64 emulator for the New Nintendo 3DS / New 2DS XL (ARM11 MPCore, 4 cores at 804 MHz, 2 MB shared L2,
+N643DS is an N64 emulator for the New Nintendo 3DS / New 2DS XL (ARM11 MPCore, 4 cores at 804 MHz, 2 MB shared L2,
 PICA200 GPU). The goal is full speed for most of the library with an exact CPU. It follows gc3ds's method and reuses
 its 3DS knowledge; gc3ds's `docs/FINDINGS.md`, `docs/research/` and `AGENTS.md` "Hardware facts" apply here.
 
@@ -13,7 +13,7 @@ its 3DS knowledge; gc3ds's `docs/FINDINGS.md`, `docs/research/` and `AGENTS.md` 
    or pull requests. Tests use programs built from source here, or open-source homebrew fetched by script into an
    ignored directory (docs/TEST_ROMS.md).
 2. **Exactness first.** The interpreter (`core/src/cpu/vr4300*.c`) is the CPU reference; a JIT that changes results
-   is a bug. The RSP and RDP follow the three-tier model in `docs/DESIGN.md` (owner decision pending).
+   is a bug. The RSP and RDP follow the three-tier model in `docs/DESIGN.md`.
 3. **Measure, do not guess.** Performance work is judged on the console with separate whole runs or in-run A/Bs, as in
    gc3ds. Report means and standard errors.
 4. **Keep the evidence.** Ideas with redesign potential go into `docs/research/REDESIGN_CANDIDATES.md` with evidence,

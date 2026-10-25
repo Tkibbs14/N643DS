@@ -1,6 +1,6 @@
-# ultra3ds design
+# N643DS design
 
-ultra3ds is an N64 emulator for the New Nintendo 3DS / New 2DS XL. It follows gc3ds's method (exact reference,
+N643DS is an N64 emulator for the New Nintendo 3DS / New 2DS XL. It follows gc3ds's method (exact reference,
 measured switches, evidence kept) and reuses its 3DS knowledge: the ARM11 JIT techniques, the PICA200 backend's
 lessons, the relay and the measurement tools. This file is the plan; `docs/HANDOFF.md` is the state.
 
@@ -22,7 +22,7 @@ with custom microcodes or heavy framebuffer effects come after the common ones (
   the GameCube's TEV does.
 - **Memory.** RDRAM is 4 or 8 MB; a New 3DS application has 124 MB (178 MB in the larger mode, 3dbrew).
 
-## Exactness model (owner decision pending)
+## Exactness model (adopted 2026-10-25)
 
 gc3ds's rule is that the interpreter is the reference and everything else must match it. Here that holds for the CPU,
 but a PICA200 cannot reproduce the RDP bit for bit, so the proposal is three tiers:
@@ -80,8 +80,8 @@ in from the start.
 ## Remote runs and gc3ds
 
 The relay protocol (gc3ds `docs/REMOTE_RUNS.md`) installs a job's build over the running program's own .3dsx. Before
-ultra3ds builds go through the relay, jobs need an application field so a gc3ds client never installs an ultra3ds
-build (and the reverse), and ultra3ds keeps its own SD directory (`sdmc:/ultra3ds/`). That change touches the relay
+N643DS builds go through the relay, jobs need an application field so a gc3ds client never installs an N643DS
+build (and the reverse), and N643DS keeps its own SD directory (`sdmc:/N643DS/`). That change touches the relay
 server and both clients and is not made yet.
 
 ## Scope order

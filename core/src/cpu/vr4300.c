@@ -11,7 +11,12 @@ Vr g_cpu;
 volatile bool g_cpuStop;
 int g_plant;
 static u64 g_runUntil;
-static u64 g_traceLeft;
+static u64 g_traceLeft, g_traceFrom;
+int g_traceExc;  // --trace-exc: print every exception
+u32 g_watchPa;   // --watch PA: print CPU stores to that word (debugging)
+u32 g_trapPcAbove;  // --trap-pc-above PA: report the first fetch at or above PA, with the jumps before it
+static u64 g_pcRing[32];
+static u32 g_pcPos;
 static u64 g_cop0Latch;  // the last value written to any COP0 register: read back from unimplemented ones (ares)
 static bool g_irqPending;
 
@@ -23,7 +28,7 @@ static bool g_irqPending;
 #define UIMM ((u64)(u16)op)
 #define GR(n) (c->gpr[n])
 
-void vr_trace_enable(u64 count) { g_traceLeft = count; }
+void vr_trace_enable(u64 count, u64 fromInstruction) { g_traceLeft = count; g_traceFrom = fromInstruction; }
 
 // ---- Count / Compare ----------------------------------------------------------------------------------------------
 u32 vr_count(const Vr* c) { return (u32)((c->cycles - c->countBase) >> 1); }
@@ -58,6 +63,10 @@ void vr_set_ip(Vr* c, int bit, bool on) {
 }
 
 static void exception_at(Vr* c, int code, int ce, u32 vecOff) {
+    if (UNLIKELY(g_traceExc) || (UNLIKELY(g_traceLeft) && c->instructions >= g_traceFrom))
+        fprintf(stderr, "  exception %d at %08x: status %08x cause %08x (instruction %llu)\n", code, (u32)c->pc,
+                (u32)c->cop0[C0_STATUS],
+                (u32)c->cop0[C0_CAUSE], (unsigned long long)c->instructions);
     u32 st = (u32)c->cop0[C0_STATUS];
     u64 cause = c->cop0[C0_CAUSE] & ~(0x7Cull | (3ull << 28) | (1ull << 31));
     cause |= (u64)(code << 2) | ((u64)ce << 28);
@@ -132,6 +141,9 @@ static bool st(Vr* c, u64 va, int size, u64 v) {
     if (UNLIKELY(va & (size - 1))) { address_error(c, va, true); return false; }
     u32 pa;
     if (!xlat(c, va, true, &pa)) return false;
+    if (UNLIKELY(g_watchPa) && pa <= g_watchPa + 3 && pa + (u32)size > g_watchPa)
+        fprintf(stderr, "  store %d bytes 0x%llx to 0x%08x at pc %08x (instruction %llu)\n", size, (unsigned long long)v,
+                pa, (u32)c->pc, (unsigned long long)c->instructions);
     if (LIKELY(pa < g_mem.rdramSize)) {
         switch (size) {
         case 1: m_w8(g_mem.rdram, pa, (u8)v); break;
@@ -154,7 +166,30 @@ static bool fetch(Vr* c, u64 pc, u32* op) {
     if (UNLIKELY(pc & 3)) { address_error(c, pc, false); return false; }
     u32 pa;
     if (!xlat(c, pc, false, &pa)) return false;
-    *op = LIKELY(pa < g_mem.rdramSize) ? m_r32(g_mem.rdram, pa) : bus_r32(pa);
+    if (UNLIKELY(g_trapPcAbove) && pa >= g_trapPcAbove && pa < 0x04000000u) {  // --trap-pc-above: first fetch there
+        fprintf(stderr, "  fetch at 0x%08x (instruction %llu); last jumps (from>to):", pa,
+                (unsigned long long)c->instructions);
+        for (int i = 0; i < 32; i++) {
+            u64 j = g_pcRing[(g_pcPos + i) & 31];
+            fprintf(stderr, " %08x>%08x", (u32)(j >> 32), (u32)j);
+        }
+        fprintf(stderr, "\n");
+        g_trapPcAbove = 0;
+    }
+    if (LIKELY(pa < g_mem.rdramSize)) {
+        *op = m_r32(g_mem.rdram, pa);
+        return true;
+    }
+    if (UNLIKELY(g_traceExc) && pa < 0x03F00000u) {  // running off the end of RDRAM: show how it got there
+        fprintf(stderr, "  fetch from unmapped 0x%08x; last jumps (from>to):", pa);
+        for (int i = 0; i < 32; i++) {
+            u64 j = g_pcRing[(g_pcPos + i) & 31];
+            fprintf(stderr, " %08x>%08x", (u32)(j >> 32), (u32)j);
+        }
+        fprintf(stderr, "\n");
+        g_traceExc = 0;
+    }
+    *op = bus_r32(pa);
     return true;
 }
 
@@ -445,6 +480,12 @@ static void op_cop0(Vr* c, u32 op) {
                 c->cop0[C0_STATUS] = s & ~ST_EXL;
             }
             c->llbit = false;
+            if (UNLIKELY(g_traceExc)) {
+                g_pcRing[g_pcPos++ & 31] = (c->pc << 32) | (u32)c->npc;
+                if ((u32)c->npc >= 0x80400000u && (u32)c->npc < 0x80800000u)
+                    fprintf(stderr, "  eret to %08x (instruction %llu)\n", (u32)c->npc,
+                            (unsigned long long)c->instructions);
+            }
             vr_check_irq(c);
             break;
         }
@@ -661,17 +702,25 @@ void vr_step(Vr* c) {
     }
     u32 op;
     if (fetch(c, c->pc, &op)) {
-        if (UNLIKELY(g_traceLeft)) {
+        if (UNLIKELY(g_traceLeft) && c->instructions >= g_traceFrom) {
             char buf[96];
+            u64 before[32];
             g_traceLeft--;
-            fprintf(stderr, "%08x: %08x  %s\n", (u32)c->pc, op, vr_disasm(op, c->pc, buf, sizeof buf));
+            fprintf(stderr, "%08x: %08x  %-32s", (u32)c->pc, op, vr_disasm(op, c->pc, buf, sizeof buf));
+            for (int i = 0; i < 32; i++) before[i] = c->gpr[i];
+            exec(c, op);
+            for (int i = 1; i < 32; i++)
+                if (c->gpr[i] != before[i]) fprintf(stderr, " r%d=%016llx", i, (unsigned long long)c->gpr[i]);
+            fprintf(stderr, "\n");
+        } else {
+            exec(c, op);
         }
-        exec(c, op);
     }
     c->gpr[0] = 0;
     if (c->excTaken) return;
     c->pc = c->npc;
     if (c->branchPending) {
+        if (UNLIKELY(g_traceExc)) g_pcRing[g_pcPos++ & 31] = ((c->pc - 4) << 32) | (u32)c->branchTo;
         c->npc = c->branchTo;
         c->branchPending = false;
     } else {

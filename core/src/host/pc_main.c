@@ -1,5 +1,5 @@
 // PC frontend: runs a cartridge headless, prints ISViewer text, dumps VI pictures and statistics.
-//   u64emu ROM [--fields N] [--cycles N] [--out DIR] [--shot-every N] [--trace N] [--save TYPE] [--4mb]
+//   n64emu ROM [--fields N] [--cycles N] [--out DIR] [--shot-every N] [--trace N] [--save TYPE] [--4mb]
 //              [--cic N] [--until-isv] [--stats]
 // --until-isv stops at the first ISViewer line holding "PASS" or "FAIL" and exits 0 / 1 (the test ROMs' protocol).
 #include <stdio.h>
@@ -95,7 +95,7 @@ static int parse_save(const char* s) {
 int main(int argc, char** argv) {
     const char* romPath = NULL;
     u64 maxCycles = UINT64_MAX;
-    u64 trace = 0;
+    u64 trace = 0, traceFrom = 0;
     int saveType = SAVE_EEPROM4K, cic = 0;
     u32 rdram = 8u << 20;
     bool stats = false;
@@ -107,6 +107,10 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--out") && more) g_outDir = argv[++i];
         else if (!strcmp(a, "--shot-every") && more) g_shotEvery = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(a, "--trace") && more) trace = strtoull(argv[++i], NULL, 0);
+        else if (!strcmp(a, "--trace-exc")) g_traceExc = 1;
+        else if (!strcmp(a, "--trap-pc-above") && more) { g_trapPcAbove = (u32)strtoul(argv[++i], NULL, 0) & 0x1FFFFFFF; g_traceExc = 1; }
+        else if (!strcmp(a, "--watch") && more) g_watchPa = (u32)strtoul(argv[++i], NULL, 0) & 0x1FFFFFFF;
+        else if (!strcmp(a, "--trace-from") && more) traceFrom = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(a, "--save") && more) saveType = parse_save(argv[++i]);
         else if (!strcmp(a, "--cic") && more) cic = atoi(argv[++i]);
         else if (!strcmp(a, "--4mb")) rdram = 4u << 20;
@@ -116,11 +120,11 @@ int main(int argc, char** argv) {
         else { fprintf(stderr, "unknown option %s\n", a); return 2; }
     }
     if (!romPath) {
-        fprintf(stderr, "usage: u64emu ROM [--fields N] [--cycles N] [--out DIR] [--shot-every N] [--trace N]\n"
+        fprintf(stderr, "usage: n64emu ROM [--fields N] [--cycles N] [--out DIR] [--shot-every N] [--trace N]\n"
                         "              [--save none|eep4k|eep16k|sram|sram96k|flash] [--4mb] [--cic N] [--until-isv] [--stats]\n");
         return 2;
     }
-    if (getenv("U64_PLANT")) g_plant = atoi(getenv("U64_PLANT"));
+    if (getenv("N64_PLANT")) g_plant = atoi(getenv("N64_PLANT"));
     if (g_outDir) mkdir(g_outDir, 0777);
     if (!sys_init(rdram, saveType)) return 1;
     if (!rom_load(romPath)) return 1;
@@ -133,7 +137,7 @@ int main(int argc, char** argv) {
     g_pad[0].present = true;
     sys_reset();
     rom_boot_hle();
-    if (trace) vr_trace_enable(trace);
+    if (trace) vr_trace_enable(trace, traceFrom);
 
     clock_t t0 = clock();
     sys_run(maxCycles);

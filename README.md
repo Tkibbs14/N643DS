@@ -1,4 +1,4 @@
-# ultra3ds
+# N643DS
 
 An N64 emulator for homebrew-enabled **New Nintendo 3DS / New 2DS XL** systems, built the way gc3ds (the GameCube
 emulator for the same hardware) is: an exact CPU reference, every optimization measured on a real New 2DS XL, and the
@@ -10,17 +10,18 @@ evidence kept.
   stated VR4300 behaviour (`docs/TEST_ROMS.md`).
 - The machine around it: memory map, MI / VI / AI / PI / SI / RSP / RDP interfaces, the PIF's joybus (controllers,
   EEPROM), SRAM, the ISViewer debug port, a high-level boot.
-- No RSP or RDP yet: games boot and run their CPU code, but RSP tasks complete without doing their work, so nothing is
-  drawn. That is the next step (`docs/DESIGN.md`).
+- No RSP or RDP yet: games boot and run their CPU code (Super Mario 64, Mario Kart 64, Ocarina of Time, Star Fox 64,
+  Paper Mario, GoldenEye 007, Banjo-Kazooie and Super Smash Bros. all start their graphics and audio tasks), but RSP
+  tasks complete without doing their work, so nothing is drawn. That is the next step (`docs/DESIGN.md`).
 
-**Bring your own games.** ultra3ds contains no game data, BIOS or firmware, and never will. Use dumps of cartridges
+**Bring your own games.** N643DS contains no game data, BIOS or firmware, and never will. Use dumps of cartridges
 you own.
 
 ## Build and run (Linux or WSL)
 
 ```bash
-make -C core                                     # core/build/u64emu
-core/build/u64emu game.z64 --fields 600 --out out --shot-every 60 --stats
+make -C core                                     # core/build/n64emu
+core/build/n64emu game.z64 --fields 600 --out out --shot-every 60 --stats
 bash core/tests/cpu/run_tests.sh                 # the CPU suite (needs mipsel-linux-gnu-gcc and qemu-user)
 bash core/tests/cpu/run_tests.sh plant           # its planted-bug self-test
 ```

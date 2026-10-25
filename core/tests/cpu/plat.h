@@ -1,4 +1,4 @@
-// CPU test programs: one C source runs twice, as a cartridge on u64emu and as a Linux n32 program on qemu-mipsn32
+// CPU test programs: one C source runs twice, as a cartridge on n64emu and as a Linux n32 program on qemu-mipsn32
 // (-cpu R4000), and run_tests.sh diffs the two outputs. OUT lines are architectural results and must match qemu;
 // EXPECT lines are VR4300-specific behaviour (or exceptions, which only the cartridge build can take) and are checked
 // against a stated value in the cartridge build only. docs/TEST_ROMS.md.

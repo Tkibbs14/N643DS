@@ -85,8 +85,10 @@ u64 vr_fpr_read_d(Vr* c, int r);     // DMFC1 / LDC1 view
 void vr_fpr_write_d(Vr* c, int r, u64 v);
 
 // Debugging
-void vr_trace_enable(u64 count);
-// Planted bugs that the CPU tests must catch (U64_PLANT=n, core/tests/cpu/run_tests.sh plant): 1 DSUBU, 2 LDR,
+void vr_trace_enable(u64 count, u64 fromInstruction);
+// Planted bugs that the CPU tests must catch (N64_PLANT=n, core/tests/cpu/run_tests.sh plant): 1 DSUBU, 2 LDR,
 // 3 the FPU rounding mode, 4 branch-likely nullification, 5 the SRA quirk.
 extern int g_plant;
+extern int g_traceExc;
+extern u32 g_watchPa, g_trapPcAbove;
 const char* vr_disasm(u32 op, u64 pc, char* buf, size_t n);

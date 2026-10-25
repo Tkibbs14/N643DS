@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# CPU tests (docs/TEST_ROMS.md). Each test source is built twice: as a cartridge run on u64emu, and as a Linux n32
+# CPU tests (docs/TEST_ROMS.md). Each test source is built twice: as a cartridge run on n64emu, and as a Linux n32
 # program run on qemu-mipsn32 -cpu R4000. Their OUT lines must match; EXPECT failures (cartridge only) fail the test.
 #   bash core/tests/cpu/run_tests.sh            all tests
 #   bash core/tests/cpu/run_tests.sh alu fpu    some
 #   VERBOSE=1 ...                               every value, to find the first mismatch (diff the two .txt files)
-#   bash core/tests/cpu/run_tests.sh plant      each planted interpreter bug (U64_PLANT, vr4300.h) must fail its test
+#   bash core/tests/cpu/run_tests.sh plant      each planted interpreter bug (N64_PLANT, vr4300.h) must fail its test
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 if [ "${1:-}" = plant ]; then
     fail=0
     for pair in 1:alu 2:mem 3:fpu 4:branch 5:alu; do
         n=${pair%%:*}; t=${pair#*:}
-        if U64_PLANT=$n bash "$0" "$t" > /dev/null 2>&1; then echo "PLANT $n NOT CAUGHT by $t"; fail=1
+        if N64_PLANT=$n bash "$0" "$t" > /dev/null 2>&1; then echo "PLANT $n NOT CAUGHT by $t"; fail=1
         else echo "plant $n caught by $t"; fi
     done
     exit $fail
@@ -53,7 +53,7 @@ for t in $tests; do
         fi
     done
     rc=0
-    "$root/build/u64emu" "$out/$t.rom/$t.z64" --until-isv --fields 100000 > "$out/$t.rom.txt" 2>"$out/$t.rom.err" || rc=$?
+    "$root/build/n64emu" "$out/$t.rom/$t.z64" --until-isv --fields 100000 > "$out/$t.rom.txt" 2>"$out/$t.rom.err" || rc=$?
     if [[ " $ROMONLY " == *" $t "* ]]; then
         if [ $rc = 0 ]; then echo "PASS $t"; else echo "FAIL $t (rc $rc)"; grep -h FAIL "$out/$t.rom.txt" | head -20; fail=1; fi
         continue

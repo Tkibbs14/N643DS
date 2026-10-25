@@ -107,8 +107,17 @@ void rom_boot_hle(void) {
     if (dst + len > g_mem.rdramSize) len = g_mem.rdramSize - dst;
     m_copy(g_mem.rdram, dst, g_mem.rom, 0x1000, len);
 
-    // osMemSize (CIC 6105 keeps it at 0x3F0)
-    m_w32(g_mem.rdram, g_rom.cic == 6105 ? 0x3F0 : 0x318, g_mem.rdramSize);
+    // The boot globals IPL3 stores for libultra (n64brew "IPL3"): osTvType, osRomType, osRomBase, osResetType, osCicId,
+    // osVersion, osMemSize (also at 0x3F0 for CIC 6105), then osAppNMIBuffer. libultra builds every PI DMA address
+    // from osRomBase. osCicId holds the CIC's number here (unverified against hardware).
+    m_w32(g_mem.rdram, 0x300, g_mem.pal ? 0 : 1);
+    m_w32(g_mem.rdram, 0x304, 0);
+    m_w32(g_mem.rdram, 0x308, 0xB0000000u);
+    m_w32(g_mem.rdram, 0x30C, 0);
+    m_w32(g_mem.rdram, 0x310, (u32)g_rom.cic);
+    m_w32(g_mem.rdram, 0x314, 0);
+    m_w32(g_mem.rdram, 0x318, g_mem.rdramSize);
+    if (g_rom.cic == 6105) m_w32(g_mem.rdram, 0x3F0, g_mem.rdramSize);
 
     // PI domain 1 timing from the header's first word
     u32 h = m_r32(g_mem.rom, 0);
