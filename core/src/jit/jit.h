@@ -15,6 +15,7 @@ extern bool g_jitEnabled;
 typedef struct {
     u64 blocks, compiles, flushes, invalidations, insns, fallbacks;  // fallbacks: instructions not translated
     u64 entries, steps;  // block entries, interpreter steps (budget, delay slots, unmapped code)
+    u64 idleCycles;      // cycles fast-forwarded through idle loops
 } JitStats;
 extern JitStats g_jitStats;
 

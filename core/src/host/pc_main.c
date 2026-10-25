@@ -170,11 +170,11 @@ int main(int argc, char** argv) {
                 (unsigned long long)g_stats.piDmas, (unsigned long long)g_stats.siDmas, (unsigned long long)g_stats.aiBufs);
         if (g_jitEnabled)
             fprintf(stderr, "jit: %llu compiles (%llu instructions, %llu through the interpreter), %llu block entries, "
-                            "%llu interpreter steps, %llu invalidations, %llu flushes\n",
+                            "%llu interpreter steps, %llu invalidations, %llu flushes, %llu idle cycles skipped\n",
                     (unsigned long long)g_jitStats.compiles, (unsigned long long)g_jitStats.insns,
                     (unsigned long long)g_jitStats.fallbacks, (unsigned long long)g_jitStats.entries,
                     (unsigned long long)g_jitStats.steps, (unsigned long long)g_jitStats.invalidations,
-                    (unsigned long long)g_jitStats.flushes);
+                    (unsigned long long)g_jitStats.flushes, (unsigned long long)g_jitStats.idleCycles);
     }
     if (hash) {
         // The machine's end state, for comparing runs (core/tools/jit_check.sh): CPU registers, RDRAM, the count.

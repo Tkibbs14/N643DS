@@ -75,6 +75,7 @@ extern bool g_jitCodeHit;  // set by jit_code_written: compiled code was overwri
 
 // Address translation (vr4300_tlb.c). Returns false after raising the exception.
 bool vr_translate(Vr* c, u64 vaddr, bool write, u32* paddr);
+bool vr_probe_fetch(const Vr* c, u64 va, u32* pa);  // TLB lookup without side effects (JIT dispatch)
 void vr_tlbr(Vr* c);
 void vr_tlbwi(Vr* c);
 void vr_tlbwr(Vr* c);

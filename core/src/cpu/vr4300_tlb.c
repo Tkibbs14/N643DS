@@ -43,6 +43,25 @@ static bool tlb_lookup(Vr* c, u64 va, bool write, u32* pa, bool addr64) {
 
 #define addr_error vr_address_error
 
+// A TLB-mapped 32-bit address read in kernel mode, without raising anything (the JIT's dispatcher: code at a mapped
+// address). False when the access would fault; the interpreter then runs the instruction and takes the exception.
+bool vr_probe_fetch(const Vr* c, u64 va, u32* pa) {
+    if (va != SEXT32((u32)va)) return false;
+    u32 asid = (u32)c->cop0[C0_ENTRYHI] & 0xFF;
+    for (int i = 0; i < 32; i++) {
+        const TlbEntry* e = &c->tlb[i];
+        u64 mask = VPN_MASK & ~(u64)e->pageMask;
+        if ((va & mask) != (e->entryHi & mask)) continue;
+        if (!(e->entryHi & 0x1000) && (u32)(e->entryHi & 0xFF) != asid) continue;
+        u32 size = ((e->pageMask >> 13) + 1) << 12;
+        u64 lo = (va & size) ? e->entryLo1 : e->entryLo0;
+        if (!(lo & 2)) return false;
+        *pa = (((u32)(lo >> 6) & 0xFFFFF) << 12) + ((u32)va & (size - 1));
+        return true;
+    }
+    return false;
+}
+
 bool vr_translate(Vr* c, u64 va, bool write, u32* pa) {
     u32 s = (u32)c->cop0[C0_STATUS];
     int ksu = (s & (ST_EXL | ST_ERL)) ? 0 : ((s >> 3) & 3);

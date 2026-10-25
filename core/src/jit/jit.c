@@ -42,7 +42,9 @@ void jit_code_written(u32 pa, u32 len) {
 
 typedef struct {
     void (*code)(Vr*);
-    u32 n;  // guest instructions, for the budget check
+    u32 n;      // guest instructions, for the budget check
+    u32 va;     // the guest address it was compiled for (TLB-mapped code: a physical page may appear at several)
+    bool idle;  // a branch to itself with a NOP in its delay slot: fast-forwarded to the next event
 } Block;
 
 static u32* g_code;
@@ -597,12 +599,15 @@ static void emit_branch(Ctx* x, u32 op, u32 i, u32 slotOp) {
 // ---- Compiling a block ---------------------------------------------------------------------------------------------
 static Block* compile(u32 va, u32 pa) {
     u32 n = 0, br = MAX_INSNS;
-    for (u32 i = 0; i < MAX_INSNS; i++) {
+    // A block stays inside its 4 KB page: at a TLB-mapped address the next virtual page can map anywhere.
+    u32 room = (0x1000 - (pa & 0xFFF)) / 4;
+    if (room > MAX_INSNS) room = MAX_INSNS;
+    for (u32 i = 0; i < room; i++) {
         if (pa + 4 * i + 4 > g_mem.rdramSize) break;
         u32 op = m_r32(g_mem.rdram, pa + 4 * i);
         if (is_branch(op)) {
             // BC1 needs the coprocessor-usable check; a branch in a delay slot is undefined: interpreter for both
-            bool ok = (op >> 26) != 0x11 && pa + 4 * i + 8 <= g_mem.rdramSize &&
+            bool ok = (op >> 26) != 0x11 && i + 1 < room && pa + 4 * i + 8 <= g_mem.rdramSize &&
                       !is_branch(m_r32(g_mem.rdram, pa + 4 * i + 4));
             if (ok) { br = i; n = i + 2; }
             break;
@@ -639,6 +644,14 @@ static Block* compile(u32 va, u32 pa) {
         Block* b = &g_blocks[g_nblocks++];
         b->code = (void (*)(Vr*))(uintptr_t)x.e.buf;
         b->n = n;
+        b->va = va;
+        b->idle = false;
+        if (n == 2 && br == 0 && m_r32(g_mem.rdram, pa + 4) == 0) {  // `b .` / `j .` with a NOP: an idle loop
+            u32 op = m_r32(g_mem.rdram, pa), prim = op >> 26;
+            bool selfB = prim == 4 && ((op >> 21) & 31) == ((op >> 16) & 31) && (op & 0xFFFF) == 0xFFFF;
+            bool selfJ = prim == 2 && ((((va + 4) & 0xF0000000u) | ((op & 0x03FFFFFF) << 2)) == va);
+            b->idle = selfB || selfJ;
+        }
         g_codeUsed += e->n;
         g_codePage[pa >> 12] = 1;
         g_codePage[(pa + 4 * n - 1) >> 12] = 1;
@@ -658,8 +671,10 @@ void jit_run(Vr* c, u64 untilCycles) {
     while (c->cycles < g_vrRunUntil && !g_cpuStop) {
         u32 a = (u32)c->pc;
         u32 pa = a & 0x1FFFFFFF;
-        if (g_vrIrqPending || c->nextInDelay || c->branchPending || c->pc != SEXT32(a) || (a >> 30) != 2 || (a & 3) ||
-            pa >= g_mem.rdramSize || !kernel_mode(c)) {
+        bool ok = !g_vrIrqPending && !c->nextInDelay && !c->branchPending && c->pc == SEXT32(a) && !(a & 3) &&
+                  kernel_mode(c);
+        if (ok && (a >> 30) != 2) ok = vr_probe_fetch(c, c->pc, &pa);  // TLB-mapped code (GoldenEye's at 0x7F...)
+        if (!ok || pa >= g_mem.rdramSize) {
             vr_step(c);
             g_jitStats.steps++;
             continue;
@@ -667,6 +682,16 @@ void jit_run(Vr* c, u64 untilCycles) {
         Block** page = g_map[pa >> 12];
         if (!page) page = g_map[pa >> 12] = calloc(1024, sizeof(Block*));
         Block* b = page ? page[(pa & 0xFFF) >> 2] : NULL;
+        if (b && b->code && b->va != a) b = NULL;  // the page is mapped at another address now: compile for this one
+        if (b && b->idle) {
+            // The interpreter would run the loop until the event; registers do not change, only time does.
+            u64 iters = (g_vrRunUntil - c->cycles) / 2;
+            if (iters) {
+                c->cycles += 2 * iters;
+                g_jitStats.idleCycles += 2 * iters;
+                continue;
+            }
+        }
         if (!b) {
             if (g_vrRunUntil - c->cycles < MAX_INSNS) {  // near an event: step rather than compile a fragment
                 vr_step(c);
