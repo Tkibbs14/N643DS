@@ -33,7 +33,7 @@ static FILE* g_log;          // perf.csv, teed into the relay job when one runs
 static bool g_quitApp;
 static bool g_ranGame;       // a cartridge ran in this process (the next relay job restarts first, as gc3ds does)
 static int g_showEvery = 2;  // copy the VI picture to the top screen every N fields
-static volatile bool g_stopRun;
+static volatile bool g_stopRun, g_stopJob;  // live command "stop": this run, and the rest of the job
 static char g_isvLine[512];
 static size_t g_isvLen;
 static int g_isvResult;      // -1 none, 0 PASS, 1 FAIL
@@ -139,7 +139,7 @@ static void apply_cmds(void) {
     char cmd[128];
     while (relay_take_cmd(cmd, sizeof cmd)) {
         logf_("# command %s\n", cmd);
-        if (!strcmp(cmd, "stop")) g_stopRun = true;
+        if (!strcmp(cmd, "stop")) g_stopRun = g_stopJob = true;
     }
 }
 
@@ -211,14 +211,15 @@ static bool load_rom(const char* path) {
 static const char* run_tests(void) {
     static const char* const names[] = {"alu", "mem", "branch", "fpu", "exc", "cop0"};
     int failed = 0;
-    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+    g_stopJob = false;
+    for (size_t i = 0; i < sizeof names / sizeof names[0] && !g_stopJob; i++) {
         char path[64];
         snprintf(path, sizeof path, "romfs:/tests/%s.z64", names[i]);
         logf_("# test %s\n", names[i]);
         printf("test %s...\n", names[i]);
         if (!load_rom(path)) { failed++; continue; }
         g_showEvery = 0;
-        run_loaded(300, false);
+        run_loaded(60, false);
         const char* r = g_isvResult == 0 ? "PASS" : g_isvResult == 1 ? "FAIL" : "NO RESULT";
         logf_("# test %s: %s\n", names[i], r);
         printf("test %s: %s\n", names[i], r);

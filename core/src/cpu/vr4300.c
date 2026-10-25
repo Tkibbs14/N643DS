@@ -709,6 +709,11 @@ int vr_jit_fallback(Vr* c, u32 op, u32 remaining, u32 inDelay) {
     u64 after = c->pc + 4;
     c->npc = after;
     g_jitCodeHit = false;
+    {
+        u32 p = op >> 26;
+        u32 key = p == 0 ? 64 + (op & 63) : p == 1 ? 128 + ((op >> 16) & 31) : p == 0x11 ? 160 + ((op >> 21) & 31) : p;
+        g_jitStats.fallbackOps[key]++;  // what the JIT should translate next (n64emu --stats)
+    }
     exec(c, op);
     c->gpr[0] = 0;
     if (c->excTaken) return 1;

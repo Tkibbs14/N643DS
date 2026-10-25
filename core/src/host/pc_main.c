@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
     u64 trace = 0, traceFrom = 0;
     int saveType = SAVE_EEPROM4K, cic = 0;
     u32 rdram = 8u << 20;
-    bool stats = false, useJit = false, hash = false;
+    bool stats = false, useJit = false, hash = false, sliceFields = false;
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         bool more = i + 1 < argc;
@@ -119,6 +119,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--stats")) stats = true;
         else if (!strcmp(a, "--jit")) useJit = true;
         else if (!strcmp(a, "--hash")) hash = true;
+        else if (!strcmp(a, "--slice")) sliceFields = true;
         else if (a[0] != '-' && !romPath) romPath = a;
         else { fprintf(stderr, "unknown option %s\n", a); return 2; }
     }
@@ -150,7 +151,11 @@ int main(int argc, char** argv) {
     if (trace) vr_trace_enable(trace, traceFrom);
 
     clock_t t0 = clock();
-    sys_run(maxCycles);
+    if (sliceFields) {  // --slice: run one field at a time, as the 3DS host does
+        while (!g_quit && g_cpu.cycles < maxCycles) sys_run(g_cpu.cycles + (g_vi.cyclesPerField ? g_vi.cyclesPerField : CPU_HZ / 60));
+    } else {
+        sys_run(maxCycles);
+    }
     double secs = (double)(clock() - t0) / CLOCKS_PER_SEC;
 
     if (g_outDir) {
@@ -175,6 +180,22 @@ int main(int argc, char** argv) {
                     (unsigned long long)g_jitStats.fallbacks, (unsigned long long)g_jitStats.entries,
                     (unsigned long long)g_jitStats.steps, (unsigned long long)g_jitStats.invalidations,
                     (unsigned long long)g_jitStats.flushes, (unsigned long long)g_jitStats.idleCycles);
+        if (g_jitEnabled) {
+            // The commonest instructions run through the interpreter (key: primary opcode, 64 + SPECIAL function,
+            // 128 + REGIMM rt, 160 + COP1 format)
+            fprintf(stderr, "jit fallbacks run:");
+            for (int top = 0; top < 12; top++) {
+                int best = -1;
+                for (int k = 0; k < 192; k++)
+                    if (g_jitStats.fallbackOps[k] && (best < 0 || g_jitStats.fallbackOps[k] > g_jitStats.fallbackOps[best])) best = k;
+                if (best < 0) break;
+                const char* kind = best >= 160 ? "cop1 fmt" : best >= 128 ? "regimm" : best >= 64 ? "special" : "op";
+                int v = best >= 160 ? best - 160 : best >= 128 ? best - 128 : best >= 64 ? best - 64 : best;
+                fprintf(stderr, " %s 0x%02x: %llu;", kind, v, (unsigned long long)g_jitStats.fallbackOps[best]);
+                g_jitStats.fallbackOps[best] = 0;
+            }
+            fprintf(stderr, "\n");
+        }
     }
     if (hash) {
         // The machine's end state, for comparing runs (core/tools/jit_check.sh): CPU registers, RDRAM, the count.

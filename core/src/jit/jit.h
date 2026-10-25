@@ -16,6 +16,7 @@ typedef struct {
     u64 blocks, compiles, flushes, invalidations, insns, fallbacks;  // fallbacks: instructions not translated
     u64 entries, steps;  // block entries, interpreter steps (budget, delay slots, unmapped code)
     u64 idleCycles;      // cycles fast-forwarded through idle loops
+    u64 fallbackOps[192];  // fallbacks run, by opcode: primary, 64 + SPECIAL function, 128 + REGIMM rt, 160 + COP1 fmt
 } JitStats;
 extern JitStats g_jitStats;
 

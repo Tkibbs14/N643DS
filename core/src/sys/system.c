@@ -4,6 +4,7 @@
 #include "sys.h"
 #include "system.h"
 #include "../cpu/vr4300.h"
+#include "../jit/jit.h"
 
 void mi_reset(void);
 volatile bool g_quit;
@@ -23,6 +24,10 @@ bool sys_init(u32 rdramSize, int saveType) {
 }
 
 void sys_reset(void) {
+    // Compiled code belongs to the cartridge that was running (the 3DS host runs several in one process: the CPU
+    // tests ran the previous test's blocks, relay job 1443).
+    jit_flush();
+    memset(&g_jitStats, 0, sizeof g_jitStats);
     memset(g_mem.spmem, 0, sizeof g_mem.spmem);
     memset(g_mem.isv, 0, sizeof g_mem.isv);
     memset(&g_stats, 0, sizeof g_stats);
