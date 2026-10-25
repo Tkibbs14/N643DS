@@ -27,7 +27,13 @@ its 3DS knowledge; gc3ds's `docs/FINDINGS.md`, `docs/research/` and `AGENTS.md` 
 | Path | What |
 |---|---|
 | `core/src/cpu/` | VR4300 interpreter: `vr4300.c` (integer unit, COP0, exceptions, Count / Compare), `vr4300_tlb.c` (segments, TLB), `vr4300_fpu.c` (COP1), `vr4300_disasm.c` |
-| `core/src/sys/` | `bus.c` (memory map, cartridge, ISViewer), `sched.c`, `mi.c`, `vi.c`, `ai.c`, `pi.c`, `si.c` (PIF joybus), `sp.c` (RSP interface + RDP registers; tasks are stubbed), `ri.c`, `rom.c` (loading, CIC, high-level boot), `system.c` (reset, main loop) |
+| `core/src/sys/` | `bus.c` (memory map, cartridge, ISViewer), `sched.c`, `mi.c`, `vi.c`, `ai.c`, `pi.c`, `si.c` (PIF joybus), `sp.c` (SP interface, RSP task timing, RDP registers), `ri.c`, `rom.c` (loading, CIC, high-level boot), `system.c` (reset, main loop) |
+| `core/src/jit/` | VR4300 -> ARMv6K JIT, exact against the interpreter (`arm_emit.h` from gc3ds) |
+| `core/src/rsp/` | RSP interpreter: scalar unit (`rsp.c`), vector unit and vector loads / stores (`rsp_vu.c`) |
+| `core/src/rdp/` | RDP command stream (`rdp.c`) and the software renderer into RDRAM (`rdp_soft.c`) |
+| `core/host3ds/` | the 3DS program: menu, display, relay client (from gc3ds), JIT host services |
+| `core/tools/` | `arm_build.sh` / `jit_check.sh` (the JIT under qemu-arm), `peterlemon.py` (hardware-captured test ROMs), `contact.py` |
+| `tools/relay.sh` | remote 2DS runs (`@n643ds` jobs) |
 | `core/src/host/pc_main.c` | PC frontend: headless runs, ISViewer text, VI pictures as PPM, statistics |
 | `core/tests/cpu/` | CPU suite: one C source per test, run as a cartridge and under qemu (`run_tests.sh`) |
 | `docs/` | DESIGN, HANDOFF, TEST_ROMS, research |
@@ -43,7 +49,9 @@ n32 test programs), `qemu-mipsn32` (`qemu-user`), Python 3. devkitARM (`/opt/dev
 |---|---|
 | CPU interpreter (`core/src/cpu/`) | `bash core/tests/cpu/run_tests.sh` (all PASS) and `bash core/tests/cpu/run_tests.sh plant` (every plant caught). New instructions or behaviours get OUT groups (architectural) or EXPECTs (VR4300-specific), and a new behaviour class gets a plant |
 | Machine model (`core/src/sys/`) | `make -C core` with no warnings; the CPU suite; the hardware-derived suites once fetched |
-| Anything | `make -C core` with no new warnings |
+| JIT (`core/src/jit/`) | `bash core/tools/jit_check.sh` (CPU test cartridges identical with and without the JIT), `jit_check.sh plant` (plant 6 caught), and `FIELDS=60 jit_check.sh GAMES` (end states identical) |
+| RSP / RDP | `python3 core/tools/peterlemon.py third_party/testroms/peterlemon/RSPTest` (and `RDP`): no picture that matched the hardware capture may stop matching |
+| Anything | `make -C core` and `bash core/host3ds/build.sh` with no new warnings |
 
 ## Code style
 

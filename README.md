@@ -4,17 +4,18 @@ An N64 emulator for homebrew-enabled **New Nintendo 3DS / New 2DS XL** systems, 
 emulator for the same hardware) is: an exact CPU reference, every optimization measured on a real New 2DS XL, and the
 evidence kept.
 
-**Status: started 25 October 2026. Not a usable emulator yet.** What exists runs on a PC:
+**Status: started 25 October 2026. Not a usable emulator yet.** Games boot and draw their opening screens:
 
-- A VR4300 interpreter (integer unit, COP0, TLB, FPU) that passes a CPU test suite checked against qemu and against
-  stated VR4300 behaviour (`docs/TEST_ROMS.md`).
-- The machine around it: memory map, MI / VI / AI / PI / SI / RSP / RDP interfaces, the PIF's joybus (controllers,
-  EEPROM), SRAM, the ISViewer debug port, a high-level boot.
-- On the 2DS (`core/host3ds`): the interpreter runs cartridges from `sdmc:/n643ds/roms` at ~4 MIPS (Super Mario 64:
-  4.3% speed); remote runs through gc3ds's relay (`tools/relay.sh`).
-- No RSP or RDP yet: games boot and run their CPU code (Super Mario 64, Mario Kart 64, Ocarina of Time, Star Fox 64,
-  Paper Mario, GoldenEye 007, Banjo-Kazooie and Super Smash Bros. all start their graphics and audio tasks), but RSP
-  tasks complete without doing their work, so nothing is drawn. That is the next step (`docs/DESIGN.md`).
+- A VR4300 interpreter (integer unit, COP0, TLB, FPU), checked against qemu, stated VR4300 behaviour and
+  PeterLemon's hardware-captured tests (`docs/TEST_ROMS.md`), and an ARMv6K JIT that is exact against it.
+- The machine: memory map, MI / VI / AI / PI / SI / SP / DP interfaces, the PIF's joybus (controllers, EEPROM), SRAM,
+  the ISViewer debug port, a high-level boot.
+- An RSP interpreter that runs the games' own microcode, and a software RDP: Super Mario 64, Mario Kart 64, Ocarina of
+  Time, Star Fox 64, Paper Mario, Super Smash Bros. and Wave Race 64 render their title and opening screens on the PC.
+- On the 2DS (`core/host3ds`): the same path renders Super Mario 64's title on the device, slowly (~4%). The fast path
+  (high-level microcode, the RDP on the 3DS GPU) is next (`docs/DESIGN.md`). With the RSP stubbed, the JIT runs the
+  games' CPU side at ~30% (`docs/research/MEASUREMENTS.md`). Remote runs go through gc3ds's relay
+  (`tools/relay.sh`).
 
 **Bring your own games.** N643DS contains no game data, BIOS or firmware, and never will. Use dumps of cartridges
 you own.

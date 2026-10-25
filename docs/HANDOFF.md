@@ -1,33 +1,31 @@
 # N643DS handoff (started 2026-10-25, newest state first)
 
-> **▶ Current state (2026-10-25, night).** The interpreter and a JIT run on the PC (qemu-arm) and on the 2DS.
-> - **CPU checks:** our suite passes (alu 45, mem 19, branch 4, fpu 41 groups equal qemu's; exc, cop0) with every
->   plant caught. PeterLemon's hardware-captured CPU tests: **95 of 114 pictures identical** (an earlier commit message,
->   d751773, said 98: wrong, it was written before the full rerun). The rest: TLB / exception / Compare / VI tests that
->   show PASS but print random power-on register contents; SB and SH, identical text with an offset reference; the PI
->   DMA alignment tests (real, open); two timing tests without a reference.
-> - **JIT** (`src/jit`, exact against the interpreter by construction, `core/tools/jit_check.sh`): the CPU test
->   cartridges give identical output with and without it, plant 6 is caught, and eight games end 60 fields in states
->   identical to the interpreter's (registers, RDRAM, cycles). On the 2DS the CPU tests pass under the JIT with all
->   109 OUT hashes equal to qemu's (job 1448). Speed: docs/research/MEASUREMENTS.md (Super Mario 64: interpreter
->   4.5%, JIT 23-24% with idle loops skipped; RSP still stubbed).
-> - **Games on the PC:** Super Mario 64, Mario Kart 64, Ocarina of Time, Star Fox 64, Paper Mario, GoldenEye 007,
->   Banjo-Kazooie and Super Smash Bros. run their CPU code and start graphics and audio tasks; RSP tasks are stubbed, so
->   nothing is drawn. The owner's games: `C:\Users\tyler\TP3DS\n64\` (outside the repository; `extract.sh` there).
-> - **Relay:** N643DS jobs carry `@n643ds` and are claimed only by `GET /next?app=n643ds` (nakama-backend 9fa948f);
->   gc3ds has a `--switch PATH` job (gc3ds 37282ee) and N643DS too. New builds install and restart by themselves.
+> **▶ Current state (2026-10-25, late).** Games render: the RSP interpreter runs the games' own microcode into a
+> software RDP, on the PC and (slowly) on the 2DS.
+> - **Pictures (PC, `core/out`):** Super Mario 64 (logo, title), Mario Kart 64 (title), Ocarina of Time, Star Fox 64,
+>   Paper Mario, Super Smash Bros. and Wave Race 64 (openings); GoldenEye 007 draws one object; Banjo-Kazooie stays
+>   black (its first audio task boots from zeros at RDRAM 0x283280: open). On the 2DS (relay job 1451, `--rsp lle
+>   --jit on`) Super Mario 64's logo and title render on the device at ~4% speed (the reference path).
+> - **RSP** (`src/rsp`): PeterLemon's RSPTest, 35 of 56 pictures identical to the hardware captures on the first run;
+>   most of the rest show the same values with different line spacing (474 vs 480 rows in our picture), the
+>   reserved VACC-family opcodes accumulate on hardware (not modelled), SP DMA alignment and XBUS draw order open.
+> - **RDP** (`src/rdp`): a reference renderer (one sample per pixel, no coverage / dither), not yet measured against
+>   PeterLemon's RDP ROMs (fetched, 127 of them).
+> - **CPU:** our suite passes with every plant caught; PeterLemon's CPU tests 95 of 114 identical (an earlier commit
+>   message, d751773, said 98: wrong). **JIT:** exact against the interpreter (`core/tools/jit_check.sh`); on the 2DS
+>   Super Mario 64's CPU side runs at 28.5-30.8% with the RSP stubbed (MEASUREMENTS.md).
+> - **Relay:** N643DS jobs carry `@n643ds` (nakama-backend 9fa948f); `tools/relay.sh frames JOB` fetches pictures a job
+>   sent (`--shots N`, `cmd JOB shot`). New builds install and restart by themselves.
 
 ## Next steps, in order
 
-1. **JIT coverage and shape:** FPU arithmetic natively (with FCR31's flags exact), a register cache and block linking
-   (gc3ds's `Rc` and chaining), the MMIO slow path cheaper. `n64emu --stats` lists the commonest fallbacks.
-2. **Low-level RSP on the PC** (scalar + vector unit), the reference for graphics / audio HLE; PeterLemon's RSPTest.
-3. **Graphics HLE** (F3D first, Super Mario 64), checked byte for byte against the low-level RSP's RDP commands; a
-   software RDP on the PC for pictures; then the PICA path on the 2DS.
-4. **PI DMA alignment** (PeterLemon DMAAlignment-PI-cart) and n64-systemtest (built from source: Rust + an IPL3 taken
-   from the owner's cartridge, kept outside the repository).
-5. Still from ares, not yet confirmed by a hardware test: SRA / SRAV on non-sign-extended input, LWR's upper half,
-   division by zero, the COP2 latch, the FPU's QNaN-is-invalid rule, CVT out of range, FR=1 single writes.
+1. **Speed on the 2DS:** graphics microcode HLE (F3D / F3DEX / F3DEX2) producing the same RDP command stream as the
+   RSP interpreter (byte-compared on the PC: DESIGN.md "Exactness model"), then the RDP on the PICA200 instead of
+   the software renderer, then audio HLE and output (ndsp).
+2. **RDP accuracy:** PeterLemon's RDP ROMs through `core/tools/peterlemon.py`; the picture height (474 vs 480 rows).
+3. **Banjo-Kazooie** (zeros where its RSP boot code should be), GoldenEye's mostly black picture.
+4. **JIT:** FPU arithmetic natively, a register cache, block linking.
+5. PI DMA alignment; n64-systemtest (built from source); the ares-derived CPU behaviours still unconfirmed.
 
 ## Owner decisions (2026-10-25)
 
