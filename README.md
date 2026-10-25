@@ -10,6 +10,8 @@ evidence kept.
   stated VR4300 behaviour (`docs/TEST_ROMS.md`).
 - The machine around it: memory map, MI / VI / AI / PI / SI / RSP / RDP interfaces, the PIF's joybus (controllers,
   EEPROM), SRAM, the ISViewer debug port, a high-level boot.
+- On the 2DS (`core/host3ds`): the interpreter runs cartridges from `sdmc:/n643ds/roms` at ~4 MIPS (Super Mario 64:
+  4.3% speed); remote runs through gc3ds's relay (`tools/relay.sh`).
 - No RSP or RDP yet: games boot and run their CPU code (Super Mario 64, Mario Kart 64, Ocarina of Time, Star Fox 64,
   Paper Mario, GoldenEye 007, Banjo-Kazooie and Super Smash Bros. all start their graphics and audio tasks), but RSP
   tasks complete without doing their work, so nothing is drawn. That is the next step (`docs/DESIGN.md`).

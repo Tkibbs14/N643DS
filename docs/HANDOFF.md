@@ -1,26 +1,31 @@
 # N643DS handoff (started 2026-10-25, newest state first)
 
-> **▶ Current state (2026-10-25).** The PC core exists and its CPU is checked. `make -C core` builds `n64emu` with no
-> warnings. The CPU suite passes: alu 45 groups, mem 19, branch 4 and fpu 41 match qemu (`-cpu R4000`), plus 31 stated
-> VR4300 values, and the cartridge-only exc (110 checks) and cop0 (17). Every planted interpreter bug (1-5) is caught.
-> Commercial games boot on the PC: Super Mario 64, Mario Kart 64, Ocarina of Time, Star Fox 64, Paper Mario, GoldenEye
-> 007, Banjo-Kazooie and Super Smash Bros. run their CPU code and start graphics and audio tasks (300 fields each);
-> RSP tasks complete after a fixed time without doing their work, so nothing is drawn. Banjo-Kazooie starts only two
-> graphics tasks in that time (not investigated). Nothing runs on the 3DS yet. The owner's games are outside the
-> repository (`C:\Users\tyler\TP3DS\n64\`, extracted from the Downloads archives by `extract.sh` there).
+> **▶ Current state (2026-10-25, evening).** The interpreter runs on the PC and on the 2DS.
+> - **CPU checks:** our suite passes (alu 45, mem 19, branch 4, fpu 41 groups equal qemu's; exc, cop0) with every
+>   plant caught. PeterLemon's hardware-captured CPU tests: **95 of 114 pictures identical** (an earlier commit message,
+>   d751773, said 98: wrong, it was written before the full rerun). The rest: TLB / exception / Compare / VI tests that
+>   show PASS but print random power-on register contents; SB and SH, identical text with an offset reference; the PI
+>   DMA alignment tests (real, open); two timing tests without a reference.
+> - **On the 2DS** (relay jobs, `tools/relay.sh`): the CPU test cartridges PASS and 108 of 109 OUT hashes equal qemu's
+>   (job 1437); the odd one, cvt.s.l, was a host dependence (fixed in b175120, rerun pending as job 1440). Super Mario
+>   64 runs at **4.3% speed, 4.0 MIPS** on the interpreter (job 1438).
+> - **Games on the PC:** Super Mario 64, Mario Kart 64, Ocarina of Time, Star Fox 64, Paper Mario, GoldenEye 007,
+>   Banjo-Kazooie and Super Smash Bros. run their CPU code and start graphics and audio tasks; RSP tasks are stubbed, so
+>   nothing is drawn. The owner's games: `C:\Users\tyler\TP3DS\n64\` (outside the repository; `extract.sh` there).
+> - **Relay:** N643DS jobs carry `@n643ds` and are claimed only by `GET /next?app=n643ds` (nakama-backend 9fa948f);
+>   gc3ds has a `--switch PATH` job (gc3ds 37282ee) and N643DS too, to hand the 2DS back and forth.
 
 ## Next steps, in order
 
-1. **Hardware-derived CPU tests.** Fetch n64-systemtest and PeterLemon's CPU tests (owner approval for the download;
-   docs/TEST_ROMS.md) and fix what they find. Unconfirmed VR4300 behaviour carried from ares is marked in
-   `vr4300*.c`: SRA / SRAV on non-sign-extended input, LWR's upper half, division by zero, the COP0 and COP2 latches,
-   the FPU's QNaN-is-invalid rule, unimplemented-operation cases (CVT out of range, CVT from 64-bit beyond 2^55), FR=1
-   single writes keeping the upper word.
-2. **Low-level RSP on the PC** (scalar + vector unit), the reference for HLE; RSP test ROMs.
-3. **Super Mario 64** (user's cartridge) boots: check the boot path, VI set-up, joybus, then its graphics task through
-   the low-level RSP into an RDP command stream.
-4. **Graphics HLE** (F3D first), compared byte for byte with the low-level RSP's RDP commands; a software RDP on the PC.
-5. **The 3DS host**: the relay needs an application field first (DESIGN.md "Remote runs and gc3ds").
+1. **The JIT** on the 2DS (the interpreter's 4 MIPS is ~6% of what games need): reuse gc3ds's ARM emitter and
+   register cache (DESIGN.md "Budget").
+2. **Low-level RSP on the PC** (scalar + vector unit), the reference for graphics / audio HLE; PeterLemon's RSPTest.
+3. **Graphics HLE** (F3D first, Super Mario 64), checked byte for byte against the low-level RSP's RDP commands; a
+   software RDP on the PC for pictures.
+4. **PI DMA alignment** (PeterLemon DMAAlignment-PI-cart) and n64-systemtest (built from source: Rust + an IPL3 taken
+   from the owner's cartridge, kept outside the repository).
+5. Still from ares, not yet confirmed by a hardware test: SRA / SRAV on non-sign-extended input, LWR's upper half,
+   division by zero, the COP2 latch, the FPU's QNaN-is-invalid rule, CVT out of range, FR=1 single writes.
 
 ## Owner decisions (2026-10-25)
 
