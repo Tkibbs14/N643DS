@@ -14,6 +14,8 @@
 #include "../jit/jit.h"
 #include "../hle/hle.h"
 int cc_check(void);
+extern bool g_decodeCheckOn;
+extern int g_decodePlant;
 
 static u64 g_maxFields = 600;
 static const char* g_outDir;
@@ -121,7 +123,11 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--stats")) stats = true;
         else if (!strcmp(a, "--jit")) useJit = true;
         else if (!strcmp(a, "--hash")) hash = true;
-        else if (!strcmp(a, "--cc-check")) ccCheck = true;
+        else if (!strcmp(a, "--cc-check")) {  // and the texture decoder against texel() during the run
+            ccCheck = g_decodeCheckOn = true;
+            const char* dp = getenv("N64_DECODE_PLANT");
+            g_decodePlant = dp ? atoi(dp) : 0;
+        }
         else if (!strcmp(a, "--slice")) sliceFields = true;
         else if (!strcmp(a, "--gfx") && more) { i++; g_hleGfx = !strcmp(argv[i], "hle"); g_hleCompare = !strcmp(argv[i], "compare"); }
         else if (!strcmp(a, "--rsp") && more) g_rspMode = !strcmp(argv[++i], "stub") ? RSP_STUB : RSP_LLE;

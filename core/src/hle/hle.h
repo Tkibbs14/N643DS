@@ -9,6 +9,7 @@ u64 hle_last_commands(void);  // display-list commands of the last task (for its
 typedef struct { u64 tasks, unknown, commands, triangles; } HleStats;
 extern HleStats g_hleStats;
 extern bool g_hleGfx;  // use it (n64emu --gfx hle|lle)
+extern bool g_hleTimeRdp;  // count the renderer's time apart (g_timeRdp); costs two host ticks a command
 
 // HLE against the interpreter task by task (compare.c, n64emu --gfx compare). before: runs the task through gfx.c and
 // puts RDRAM and the RDP state back (false: unknown microcode); after (once the interpreter ran it): compares.

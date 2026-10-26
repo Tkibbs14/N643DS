@@ -13,7 +13,9 @@
 
 void rdp_command(const u64* words, int n);
 // The renderer's time is counted as the RDP's (g_timeRdp), so the statistics split geometry from rasterization
+bool g_hleTimeRdp = true;  // per-command timing (a host tick each side: the 3DS turns it off, the tick is a syscall)
 static void rdp_out(const u64* w, int n) {
+    if (!g_hleTimeRdp) { rdp_command(w, n); return; }
     u64 t0 = host_ticks();
     rdp_command(w, n);
     g_timeRdp += host_ticks() - t0;

@@ -11,6 +11,7 @@
 // ---- State (rdp.h) ------------------------------------------------------------------------------------------------
 RdpState g_rdp;
 const RdpGpu* g_rdpGpu;
+u32 g_rdpTexGen;  // bumped by every texture load, tile change and texture-mode change (rdp.h)
 #define R g_rdp
 typedef RdpTile Tile;
 
@@ -127,6 +128,72 @@ static u32 texel(const Tile* tl, int s, int t) {
 }
 u32 rdp_texel(int tile, int s, int t) { return texel(&R.tiles[tile & 7], s, t); }
 
+// A whole tile's texels, rows of tw (the GPU renderer's texture decode): the same values as texel() at every (s, t)
+// in 0..tw-1 x 0..th-1, a row at a time with the palette converted once (texel() per texel cost ~1 ms a texture on
+// the 2DS, job 1467). rdp_decode_check compares the two.
+int g_decodePlant;  // checker self-test: 1 swaps red and blue of 16-bit RGBA texels
+void rdp_decode_tile(int tile, u32 tw, u32 th, u32* out) {
+    const Tile* tl = &R.tiles[tile & 7];
+    bool tlutOn = tl->fmt == F_CI || OM(47, 1);
+    u32 pal[256];
+    if (tlutOn) for (u32 i = 0; i < 256; i++) pal[i] = tlut(i);
+    u32 pbase = (tl->palette * 16) & 255;
+    for (u32 y = 0; y < th; y++) {
+        u32 base = tl->tmem * 8 + y * tl->line * 8, swap = (y & 1) ? 4 : 0;
+        u32* o = out + y * tw;
+        switch (tl->size) {
+        case 0:
+            for (u32 x = 0; x < tw; x++) {
+                u8 b = tm8((base + x / 2) ^ swap);
+                u32 v = (x & 1) ? (b & 15u) : (b >> 4);
+                if (tlutOn) o[x] = pal[(pbase + v) & 255];
+                else if (tl->fmt == F_IA) { u32 i = (v >> 1) * 255 / 7; o[x] = rgba(i, i, i, (v & 1) ? 255 : 0); }
+                else { u32 i = v * 17; o[x] = rgba(i, i, i, i); }
+            }
+            break;
+        case 1:
+            for (u32 x = 0; x < tw; x++) {
+                u8 v = tm8((base + x) ^ swap);
+                if (tlutOn) o[x] = pal[v];
+                else if (tl->fmt == F_IA) { u32 i = (v >> 4) * 17u; o[x] = rgba(i, i, i, (v & 15) * 17); }
+                else o[x] = rgba(v, v, v, v);
+            }
+            break;
+        case 2:
+            for (u32 x = 0; x < tw; x++) {
+                u16 v = tm16((base + x * 2) ^ swap);
+                if (tl->fmt == F_IA) o[x] = rgba(v >> 8, v >> 8, v >> 8, v & 0xFF);
+                else if (tlutOn) o[x] = pal[v >> 8];
+                else {
+                    int r = (v >> 11) & 31, g = (v >> 6) & 31, b = (v >> 1) & 31;
+                    if (g_decodePlant == 1) { int k = r; r = b; b = k; }
+                    o[x] = rgba(r << 3 | r >> 2, g << 3 | g >> 2, b << 3 | b >> 2, (v & 1) ? 255 : 0);
+                }
+            }
+            break;
+        default:
+            for (u32 x = 0; x < tw; x++) o[x] = texel(tl, (int)x, (int)y);
+            break;
+        }
+    }
+}
+
+// The decoder against texel() for the current state of a tile (n64emu --cc-check runs it on drawn tiles)
+u64 g_decodeChecked, g_decodeDiffer;
+void rdp_decode_check(int tile) {
+    const Tile* tl = &R.tiles[tile & 7];
+    u32 tw = ((tl->sh - tl->sl) >> 2) + 1, th = ((tl->th - tl->tl) >> 2) + 1;
+    if (tw > 64) tw = 64;
+    if (th > 64) th = 64;
+    static u32 buf[64 * 64];
+    rdp_decode_tile(tile, tw, th, buf);
+    for (u32 y = 0; y < th; y++)
+        for (u32 x = 0; x < tw; x++) {
+            g_decodeChecked++;
+            if (buf[y * tw + x] != texel(tl, (int)x, (int)y)) g_decodeDiffer++;
+        }
+}
+
 
 // One axis: shift, offset by the tile's start, clamp, mirror, mask. `c` is in 10.5 texel units; returns texels.
 static int wrap(int c, u32 shift, u32 lo, u32 hi, u32 cm, u32 mask, int* frac) {
@@ -237,6 +304,9 @@ void rdp_combine_ref(const int t0[4], const int t1[4], const int shade[4], int o
 }
 
 // Distinct (combine word, cycle type) pairs drawn with, for the checker (n64emu --cc-check)
+bool g_decodeCheckOn;  // n64emu --cc-check: every 16th textured triangle's tile through rdp_decode_check
+static u32 g_decodeTick;
+void rdp_decode_check(int tile);
 u64 g_rdpModes[512][2];
 int g_rdpModeN;
 static void note_mode(void) {
@@ -511,6 +581,7 @@ void rdp_command(const u64* w, int n) {
         u32 id = (u32)(c >> 56) & 7;
         if (OM(52, 2) >= COPY && OM(52, 2) == FILL) break;  // triangles in fill mode: not drawn here
         note_mode();
+        if (g_decodeCheckOn && (id & 2) && !(++g_decodeTick & 15)) rdp_decode_check((int)((c >> 48) & 7));
         if (g_rdpGpu) g_rdpGpu->triangle(w, n);
         else triangle(w, id & 4, id & 2, id & 1);
         break;
@@ -523,17 +594,22 @@ void rdp_command(const u64* w, int n) {
         if (g_ciCur >= 0) ci_note();
         break;
     case 0x2E: R.primZ = (u32)(c >> 16) & 0xFFFF; break;  // SET_PRIM_DEPTH
-    case 0x2F: R.om = c; break;                            // SET_OTHER_MODES
-    case 0x30: load_tlut(c); break;
+    case 0x2F:  // SET_OTHER_MODES
+        if (((R.om ^ c) >> 45) & 7) g_rdpTexGen++;  // filter / TLUT modes: textures decode differently
+        R.om = c;
+        break;
+    case 0x30: load_tlut(c); g_rdpTexGen++; break;
     case 0x32: {  // SET_TILE_SIZE
+        g_rdpTexGen++;
         Tile* t = &R.tiles[(c >> 24) & 7];
         t->sl = (u32)(c >> 44) & 0xFFF; t->tl = (u32)(c >> 32) & 0xFFF;
         t->sh = (u32)(c >> 12) & 0xFFF; t->th = (u32)c & 0xFFF;
         break;
     }
-    case 0x33: load_block(c); break;
-    case 0x34: load_tile(c); break;
+    case 0x33: load_block(c); g_rdpTexGen++; break;
+    case 0x34: load_tile(c); g_rdpTexGen++; break;
     case 0x35: {  // SET_TILE
+        g_rdpTexGen++;
         Tile* t = &R.tiles[(c >> 24) & 7];
         t->fmt = (u32)(c >> 53) & 7; t->size = (u32)(c >> 51) & 3; t->line = (u32)(c >> 41) & 0x1FF;
         t->tmem = (u32)(c >> 32) & 0x1FF; t->palette = (u32)(c >> 20) & 15;

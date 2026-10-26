@@ -15,8 +15,20 @@ tasks are stubbed in every row (no audio HLE yet).
 | 1453 / 1454 | graphics HLE + software RDP (`--gfx hle`) | 6.0-12.3% | 46.2 s of 60 s in graphics tasks, of it 44.8 s rasterising (HLE geometry 1.4 s) |
 | 1461 | graphics HLE + PICA renderer (`--gfx hle --gpu on`) | 14.1-14.4% | 20.7 s of 40 s in the HLE and the GPU feed (8,402 draw calls, 157,741 triangles) |
 
-- The PICA path draws the title correctly (job 1461's pictures); its cost is now on the CPU side of the feed. The
-  first suspect is the texture lookup, which hashes up to 4 KB of TMEM per polygon and tile.
+- The PICA path draws the title correctly (job 1461's pictures). Then, each measured on the 2DS:
+
+| Job | Change | Super Mario 64 (head scene) | Mario Kart 64 (title) |
+|---|---|---|---|
+| 1462 | texture lookup skipped while no load / tile / mode changed (`g_rdpTexGen`) | 21.4% (HLE + feed 10.1 s of 40) | |
+| 1463 | no host tick per RDP command | 21.9% | |
+| 1464 | no vblank pacing in `C3D_FrameBegin` | 22.5% (1,054 fields in 60 s against 1,012) | |
+| 1467 | (MK64 measured) | | 5.1% (texture lookups 25.4 s of 40: 25,199 decodes) |
+| 1468 | row decoder, word hash, same-size reuse | | 6.3% (no change: the decode was not the cost) |
+| 1470 | `svcFlushProcessDataCache` instead of `C3D_TexFlush` (an IPC call to GSP) | | 22-27% |
+| 1471 / 1472 | texture cache 192 -> 512 entries (the title's working set thrashed it) | 23.8% (graphics 10.7 s of 60) | 48% (550 decodes in 30 s instead of 69,909) |
+
+- Super Mario 64 is now CPU-bound: half the JIT's compiled instructions still run through the interpreter (job 1472:
+  50,336 of 98,787), and the CPU side alone reached ~30% with graphics stubbed (job 1450).
 - PC, per task against the interpreter at 600 fields (`--gfx compare`): clearly different pixels Super Mario 64
   1.09%, Mario Kart 64 0.42%, Ocarina of Time 0.32%, Star Fox 64 0, Paper Mario 0.000%, Super Smash Bros. 0.60%,
   Wave Race 64 0.58%, Dr. Mario 64 0.18%, Mario Party 0, Pilotwings 64 1.36%, GoldenEye 007 0.04%.

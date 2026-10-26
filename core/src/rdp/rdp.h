@@ -38,3 +38,9 @@ typedef struct {
     void (*triangle)(const u64* w, int n);        // an RDP triangle command (the RSP interpreter's path)
 } RdpGpu;
 extern const RdpGpu* g_rdpGpu;
+// Changes whenever a texture could decode differently (loads, tiles, TLUT / filter modes): a GPU renderer's texture
+// cache looks up again only then.
+extern u32 g_rdpTexGen;
+
+// A whole tile's texels in rows of tw (RGBA8888, red on top), as rdp_texel at every (s, t) inside tw x th
+void rdp_decode_tile(int tile, u32 tw, u32 th, u32* out);

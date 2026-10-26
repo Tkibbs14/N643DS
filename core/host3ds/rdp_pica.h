@@ -12,6 +12,8 @@ bool rdp_pica_capture(u8* rgb, u32 width, u32 height);  // the last present as R
 
 typedef struct {
     u64 drawCalls, triangles, rects, depthClears, texDecodes, presents, splits, approxDraws, lleTriangles;
+    u64 lookupTicks, drawTicks;  // system ticks in texture lookups (misses decode) and in state + draw calls
+    u64 texels, texAllocs, hashBytes;  // texels decoded (power-of-two sizes), textures allocated, TMEM bytes hashed
 } RdpPicaStats;
 extern RdpPicaStats g_picaStats;
 // Debugging: the next g_picaTexDumpN decoded textures (RGBA8888, red on top) go to g_picaTexDump

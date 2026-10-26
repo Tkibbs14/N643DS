@@ -1,13 +1,14 @@
 # N643DS handoff (started 2026-10-25, newest state first)
 
 > **▶ Current state (2026-10-25, night).** Graphics run natively: a high-level graphics microcode and a PICA200
-> renderer. Super Mario 64's title draws on the 2DS's own GPU (relay job 1461) at ~14% speed in the head scene.
+> renderer. On the 2DS's own GPU Super Mario 64's title runs at ~24% (job 1472) and Mario Kart 64's at ~48% (job
+> 1471); games started from the 2DS menu use it (relay jobs: `--gfx hle --gpu on`).
 > - **Graphics HLE** (`src/hle/gfx.c`): F3D (Fast3D 2.0D / 2.0G), F3DEX 0.95 / 1.x, F3DEX2 / F3DZEX, plus Wave Race 64's
 >   variant (indices x5, picked by a hash of the microcode text) and GoldenEye's TRI4. Per task against the
 >   interpreter (`n64emu --gfx compare`, 600 fields), clearly different pixels: SM64 1.09%, MK64 0.42%, OoT 0.32%,
 >   Star Fox 0, Paper Mario 0.000%, Smash 0.60%, Wave Race 0.58%, Dr. Mario 0.18%, Mario Party 0, Pilotwings 1.36%,
 >   GoldenEye 0.04%. Not exact yet: float arithmetic (DESIGN.md "Exactness model").
-> - **PICA renderer** (`core/host3ds/rdp_pica.c`, `--gfx hle --gpu on`, off by default): render target per colour
+> - **PICA renderer** (`core/host3ds/rdp_pica.c`; by hand on, relay jobs `--gpu on`): render target per colour
 >   image, the combiner as TEV stages (`src/rdp/cc_pica.c`; `--cc-check`: SM64's 8 modes exact, the plant caught),
 >   textures from TMEM. Not yet: writing pictures back to RDRAM (framebuffer effects), fog in the blender, triangles
 >   from microcodes the HLE does not know, a measured default.
@@ -19,15 +20,14 @@
 
 ## Next steps, in order
 
-1. **Speed of the GPU path** (job 1461: the HLE and the GPU feed take half the time): skip the texture hash when TMEM
-   and the tile did not change (a load generation counter), then profile the feed on the 2DS; then measure and make
-   `--gpu on` the default for by-hand runs.
+1. **CPU speed** (SM64 is CPU-bound now: job 1472, half the JIT's compiled instructions interpreted): JIT FPU
+   arithmetic, then a register cache and block linking. Graphics on another core (the HLE task on core 2) after.
 2. **GPU renderer coverage:** pictures back to RDRAM when the CPU or a texture reads them, the 2-cycle fog blend as a
    TEV stage, the interpreter's triangles (microcodes the HLE does not know: Diddy Kong Racing, Banjo-Kazooie).
 3. **Audio HLE** (the standard ABI, compared sample for sample with the interpreter) and output through ndsp.
 4. **Exact HLE:** the microcodes' fixed-point arithmetic (F3DEX2 disassembly) so the RDP command stream matches.
-5. RDP accuracy (PeterLemon's RDP ROMs, the 474 vs 480 rows), Banjo-Kazooie, JIT FPU arithmetic / register cache /
-   block linking, PI DMA alignment, n64-systemtest.
+5. RDP accuracy (PeterLemon's RDP ROMs, the 474 vs 480 rows), Banjo-Kazooie, PI DMA alignment, n64-systemtest;
+   SM64's moustache missing in one head pose on the GPU path; MK64's Nintendo logo missing on the GPU path.
 
 ## Owner decisions (2026-10-25)
 

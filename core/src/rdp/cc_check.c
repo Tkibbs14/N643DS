@@ -12,6 +12,9 @@
 void rdp_combine_ref(const int t0[4], const int t1[4], const int shade[4], int out[4]);
 extern u64 g_rdpModes[512][2];
 extern int g_rdpModeN;
+extern bool g_decodeCheckOn;
+extern int g_decodePlant;
+extern u64 g_decodeChecked, g_decodeDiffer;
 
 static u32 g_seed = 12345;
 static int rnd(void) { g_seed = g_seed * 1103515245u + 12345u; return (int)((g_seed >> 16) & 255); }
@@ -56,5 +59,7 @@ int cc_check(void) {
     g_rdp = saved;
     fprintf(stderr, "cc check: %d modes: %d exact and agreeing, %d exact but differing, %d approximate%s\n", g_rdpModeN,
             exact, exactBad, approx, g_ccPlant ? " (planted bug)" : "");
-    return exactBad;
+    fprintf(stderr, "texture decode check: %llu texels, %llu differ%s\n", (unsigned long long)g_decodeChecked,
+            (unsigned long long)g_decodeDiffer, g_decodePlant ? " (planted bug)" : "");
+    return exactBad + (g_decodeDiffer != 0);
 }

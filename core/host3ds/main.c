@@ -302,6 +302,11 @@ static const char* run_loaded(u32 seconds, bool interactive) {
               (unsigned long long)g_picaStats.texDecodes, (unsigned long long)g_picaStats.presents,
               (unsigned long long)g_picaStats.splits, (unsigned long long)g_picaStats.approxDraws,
               (unsigned long long)g_picaStats.lleTriangles);
+    if (g_gpu)
+        logf_("# gpu time: texture lookups %.2f s, state and draw calls %.2f s; %llu texels decoded, %llu textures "
+              "allocated, %llu MB of TMEM hashed\n", (double)g_picaStats.lookupTicks / SYSCLOCK_ARM11,
+              (double)g_picaStats.drawTicks / SYSCLOCK_ARM11, (unsigned long long)g_picaStats.texels,
+              (unsigned long long)g_picaStats.texAllocs, (unsigned long long)(g_picaStats.hashBytes >> 20));
     g_onIsv = NULL;
     g_onField = NULL;
     return "done";
@@ -603,10 +608,11 @@ static void menu(const char* selfPath) {
                     snprintf(path, sizeof path, ROM_DIR "/%s", g_roms[sel]);
                     consoleClear();
                     g_showEvery = 2;
-                    // By hand: the JIT and the high-level graphics microcode (audio tasks are stubbed: no sound yet)
+                    // By hand: the JIT, the high-level graphics microcode on the GPU (audio tasks are stubbed: no sound yet)
                     g_jitEnabled = jit_init();
                     g_rspMode = RSP_STUB;
                     g_hleGfx = true;
+                    g_gpu = g_gpuOk;  // the PICA renderer: SM64 24%, MK64 48% against 6-12% / 5% without (jobs 1454, 1466, 1471, 1472)
                     if (load_rom(path)) run_loaded(0, true);
                 } else if (sel == g_nroms) {
                     consoleClear();
@@ -636,6 +642,7 @@ int main(int argc, char** argv) {
     gfxSetDoubleBuffering(GFX_TOP, false);
     consoleInit(GFX_BOTTOM, &g_con);
     g_gpuOk = rdp_pica_init();
+    g_hleTimeRdp = false;  // two svcGetSystemTick calls per RDP command: ~1.8 M syscalls in job 1462's 40 s
     romfsInit();
     mkdir("sdmc:/n643ds", 0777);
     relay_reserve();

@@ -21,7 +21,7 @@
 #define TH 256
 #define MAX_TARGETS 6
 #define VBUF_VERTS (3 * 32768)  // a frame's vertices (a frame that needs more ends early)
-#define MAX_TEX 192
+#define MAX_TEX 512  // Mario Kart 64's title makes ~154 new textures a frame (its sky scrolls: job 1470)
 
 typedef struct { float pos[4]; u8 col[4]; float tc[2]; } PV;  // the shader's v0, v1, v2
 
@@ -78,7 +78,7 @@ static u8 g_morton[64];
 // ---- Frames and targets -------------------------------------------------------------------------------------------
 static void frame_begin(void) {
     if (g.frameOpen) return;
-    C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+    C3D_FrameBegin(0);  // no vblank pacing (C3D_FRAME_SYNCDRAW): the emulator runs slower than the display
     g.frameOpen = true;
     g.used = g.batchStart = 0;
     g.curValid = false;
@@ -110,13 +110,32 @@ static Target* target_for(u32 addr, u32 width) {
 // ---- Textures -----------------------------------------------------------------------------------------------------
 static u32 pow2(u32 v) { u32 p = 8; while (p < v && p < 1024) p <<= 1; return p; }
 
-static u64 hash_bytes(u64 h, const u8* p, u32 n) {
-    for (u32 i = 0; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ull;
+static u64 hash_bytes(u64 h, const u8* p, u32 n) {  // a word at a time where it can (TMEM runs are 8-byte aligned)
+    g_picaStats.hashBytes += n;
+    u32 i = 0;
+    for (; i + 4 <= n; i += 4) { u32 w; memcpy(&w, p + i, 4); h = (h ^ w) * 0x100000001b3ull; }
+    for (; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ull;
     return h;
 }
 
+static u32* g_scratch;  // a decoded tile's rows (up to 1024 x 1024)
+static u32 g_scratchN;
+
 // The texture of tile `tile` as the current state describes it, decoded and cached. sizeOut: its width / height.
+static struct { u32 gen; u64 key; TexEntry* e; } g_tileMemo[8];  // each tile's last lookup, valid while g_rdpTexGen holds
+
+static TexEntry* fetch_tex_(int tile);
 static TexEntry* fetch_tex(int tile) {
+    typeof(g_tileMemo[0])* m = &g_tileMemo[tile & 7];
+    if (m->e && m->gen == g_rdpTexGen && m->e->live && m->e->key == m->key) { m->e->lastUse = g.frame; return m->e; }
+    u64 t0 = svcGetSystemTick();
+    TexEntry* e = fetch_tex_(tile);
+    g_picaStats.lookupTicks += svcGetSystemTick() - t0;
+    if (e) { m->gen = g_rdpTexGen; m->key = e->key; m->e = e; }
+    return e;
+}
+
+static TexEntry* fetch_tex_(int tile) {
     const RdpTile* t = &g_rdp.tiles[tile & 7];
     u32 tw = ((t->sh - t->sl) >> 2) + 1, th = ((t->th - t->tl) >> 2) + 1;
     if (t->masks && !(t->cms & 2)) tw = 1u << t->masks;
@@ -137,31 +156,43 @@ static TexEntry* fetch_tex(int tile) {
         else h = hash_bytes(h, g_rdp.tmem + a, n);
     }
     if (t->fmt == 2 || RDP_OM(47, 1)) h = hash_bytes(h, g_rdp.tmem + 0x800, 0x800);
-    TexEntry* lru = NULL;
+    // A hit; else the oldest entry of the same size not used this frame (its memory is reused as it is), else a free
+    // one, else the oldest (freed and allocated again: slow)
+    TexEntry *lru = NULL, *sameSize = NULL, *freeOne = NULL;
     for (int i = 0; i < MAX_TEX; i++) {
         TexEntry* e = &g.tex[i];
         if (e->live && e->key == h) { e->lastUse = g.frame; return e; }
-        if (!lru || !e->live || (lru->live && e->lastUse < lru->lastUse)) lru = e;
+        if (!e->live) { if (!freeOne) freeOne = e; continue; }
+        if (e->lastUse != g.frame && e->w == W && e->h == H && (!sameSize || e->lastUse < sameSize->lastUse)) sameSize = e;
+        if (!lru || e->lastUse < lru->lastUse) lru = e;
     }
-    TexEntry* e = lru;
+    TexEntry* e = sameSize ? sameSize : freeOne ? freeOne : lru;
     if (e->live && (e->w != W || e->h != H)) { C3D_TexDelete(&e->tex); e->live = false; }
-    if (!e->live && !C3D_TexInit(&e->tex, (u16)W, (u16)H, GPU_RGBA8)) return NULL;
+    if (!e->live) {
+        if (!C3D_TexInit(&e->tex, (u16)W, (u16)H, GPU_RGBA8)) return NULL;
+        g_picaStats.texAllocs++;
+    }
     e->live = true;
     e->key = h;
     e->w = (u16)W;
     e->h = (u16)H;
     e->lastUse = g.frame;
+    if (g_scratchN < tw * th) {
+        free(g_scratch);
+        g_scratch = malloc(tw * th * 4);
+        g_scratchN = g_scratch ? tw * th : 0;
+        if (!g_scratch) return NULL;
+    }
+    rdp_decode_tile(tile, tw, th, g_scratch);
+    g_picaStats.texels += W * H;
     u32* dst = (u32*)e->tex.data;
     for (u32 y = 0; y < H; y++) {
-        u32 sy = y < th ? y : th - 1;  // beyond the tile: its last row (clamped tiles)
+        const u32* row = g_scratch + (y < th ? y : th - 1) * tw;  // beyond the tile: its last row (clamped tiles)
         u32* tiles = dst + (y >> 3) * (W >> 3) * 64;  // row 0 at t = 1, as the PICA samples and draws (jobs 1458-1459)
         const u8* m = &g_morton[(y & 7) * 8];
-        for (u32 x = 0; x < W; x++) {
-            u32 sx = x < tw ? x : tw - 1;
-            tiles[(x >> 3) * 64 + m[x & 7]] = rdp_texel(tile, (int)sx, (int)sy);
-        }
+        for (u32 x = 0; x < W; x++) tiles[(x >> 3) * 64 + m[x & 7]] = row[x < tw ? x : tw - 1];
     }
-    C3D_TexFlush(&e->tex);
+    svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)e->tex.data, e->tex.size);  // (C3D_TexFlush: an IPC call to GSP)
     if (g_picaTexDumpN > 0 && g_picaTexDump) {  // debugging: the decoded texture as the frontend wants it
         u32* lin = malloc(W * H * 4);
         if (lin) {
@@ -292,9 +323,11 @@ static void apply_state(const Batch* b) {
 static void flush(void) {
     u32 n = g.used - g.batchStart;
     if (!n || !g.curValid) { g.batchStart = g.used; return; }
+    u64 t0 = svcGetSystemTick();
     apply_state(&g.cur);
     C3D_DrawArrays(GPU_TRIANGLES, (int)g.batchStart, (int)n);
     g_picaStats.drawCalls++;
+    g_picaStats.drawTicks += svcGetSystemTick() - t0;
     g.batchStart = g.used;
 }
 
@@ -596,6 +629,7 @@ void rdp_pica_reset(void) {
     if (g.frameOpen) { C3D_FrameEnd(0); g.frameOpen = false; }
     for (int i = 0; i < MAX_TARGETS; i++) g.targets[i].live = false;
     for (int i = 0; i < MAX_TEX; i++) if (g.tex[i].live) { C3D_TexDelete(&g.tex[i].tex); g.tex[i].live = false; }
+    memset(g_tileMemo, 0, sizeof g_tileMemo);
     g.curValid = false;
     memset(&g_picaStats, 0, sizeof g_picaStats);
 }
