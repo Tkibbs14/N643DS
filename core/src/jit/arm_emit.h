@@ -192,3 +192,11 @@ static inline void vmov_r_s(Emit* e, int rt, int sn) { E(e, 0xEE100A10u | vf_sn(
 static inline void vmov_d_rr(Emit* e, int dm, int rt, int rt2) { E(e, 0xEC400B10u | ((u32)rt2 << 16) | ((u32)rt << 12) | (u32)dm); }
 static inline void vmov_rr_d(Emit* e, int rt, int rt2, int dm) { E(e, 0xEC500B10u | ((u32)rt2 << 16) | ((u32)rt << 12) | (u32)dm); }  // FMRRD: rt = low word
 static inline void vmov_ss_rr(Emit* e, int sm, int rt, int rt2) { E(e, 0xEC400A10u | ((u32)rt2 << 16) | ((u32)rt << 12) | vf_sm(sm)); }  // sm, sm+1 = rt, rt2
+// Single-precision data processing and conversions; FPSCR to a core register.
+static inline void vsqrt_s(Emit* e, int d, int m) { E(e, 0xEEB10AC0u | vf_sd(d) | vf_sm(m)); }
+static inline void vcmp_s(Emit* e, int d, int m) { E(e, 0xEEB40A40u | vf_sd(d) | vf_sm(m)); }
+static inline void vcvt_f32_s32(Emit* e, int sd, int sm) { E(e, 0xEEB80AC0u | vf_sd(sd) | vf_sm(sm)); }   // exact below 2^24
+static inline void vcvt_s32_f32(Emit* e, int sd, int sm) { E(e, 0xEEBD0AC0u | vf_sd(sd) | vf_sm(sm)); }   // toward zero
+static inline void vcvtr_s32_f32(Emit* e, int sd, int sm) { E(e, 0xEEBD0A40u | vf_sd(sd) | vf_sm(sm)); }  // FPSCR's mode
+static inline void vmrs_r(Emit* e, int rt) { E(e, 0xEEF10A10u | ((u32)rt << 12)); }  // vmrs rt, fpscr
+static inline void vabs_d(Emit* e, int d, int m) { E(e, 0xEEB00BC0u | ((u32)d << 12) | (u32)m); }

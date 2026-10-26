@@ -55,11 +55,15 @@ static struct {
     bool fullSync;
     u64 cmds;
     int triDiv;                 // Fast3D triangle indices: x10, or x5 in Wave Race's variant
+    u32 dl;                     // the task's display list (OSTask data_ptr, read by hle_gfx_prepare)
+    u64 taskTris;               // triangles the task drew (its estimated run time: src/sys/sp.c)
 } G;
 
 HleStats g_hleStats;
 bool g_hleGfx;
 void (*g_hleVtxSink)(const HleVtx* v, int n, u32 flags);
+const HleAsync* g_hleAsync;
+bool g_hleAhead;
 static bool g_hleTrace;     // N64_HLE_TRACE=task: every command of that graphics task (0 = the first)
 static u64 g_hleTraceTask;
 
@@ -272,7 +276,6 @@ static void emit_triangle(const SV* p0, const SV* p1, const SV* p2) {
         w[n++] = ((u64)(u32)fx16(de[7]) << 32) | (u32)fx16(dy[7]);
     }
     rdp_out(w, n);
-    g_hleStats.triangles++;
 }
 
 static SV to_sv(const V* v) {
@@ -368,6 +371,8 @@ static void tri(int i0, int i1, int i2) {
         if (s[k].y > 2047) s[k].y = 2047;
     }
     TRI_TRACE("drawn");
+    g_hleStats.triangles += (u64)(np - 2);  // counted here for both renderers (the GPU path emits no RDP triangles)
+    G.taskTris += (u64)(np - 2);
     if (g_hleVtxSink) {
         HleVtx o[12];
         for (int k = 0; k < np; k++) {
@@ -684,7 +689,10 @@ static u32 text_hash(u32 text) {
     return h;
 }
 
-bool hle_gfx_task(void) {
+// A task in two halves: hle_gfx_prepare (identification and the per-task DMEM defaults, from the OSTask in DMEM:
+// on core 0 at the task's start) and hle_gfx_run (the display list: on core 2 when the host has a worker, src/sys/sp.c
+// g_hleAsync). Between them nothing else touches G.
+bool hle_gfx_prepare(void) {
     u32 text = m_r32(g_mem.spmem, 0xFD0) & 0xFFFFFF;
     u32 data = m_r32(g_mem.spmem, 0xFD8) & 0xFFFFFF, size = m_r32(g_mem.spmem, 0xFDC);
     static u32 lastText = 0xFFFFFFFF;
@@ -713,10 +721,20 @@ bool hle_gfx_task(void) {
     task_defaults(data, size);
     G.fullSync = false;
     G.cmds = 0;
-    u32 dl = m_r32(g_mem.spmem, 0xFF0) & 0xFFFFFF;  // OSTask data_ptr
-    run_dl(dl);
+    G.taskTris = 0;
+    G.dl = m_r32(g_mem.spmem, 0xFF0) & 0xFFFFFF;  // OSTask data_ptr
+    return true;
+}
+
+void hle_gfx_run(void) {
+    run_dl(G.dl);
     g_hleStats.tasks++;
     g_hleStats.commands += G.cmds;
+}
+
+bool hle_gfx_task(void) {
+    if (!hle_gfx_prepare()) return false;
+    hle_gfx_run();
     if (G.fullSync) rdp_full_sync();
     return true;
 }
@@ -733,3 +751,5 @@ void hle_reset(void) {
 }
 
 u64 hle_last_commands(void) { return G.cmds; }
+u64 hle_last_triangles(void) { return G.taskTris; }
+bool hle_last_full_sync(void) { return G.fullSync; }

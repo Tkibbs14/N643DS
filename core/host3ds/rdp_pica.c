@@ -504,7 +504,15 @@ static void on_triangle(const u64* w, int n) {  // from microcodes run on the in
 static const RdpGpu kGpu = {on_fill_rect, on_tex_rect, on_triangle};
 
 // ---- Presenting ---------------------------------------------------------------------------------------------------
-bool rdp_pica_present(u32 origin, u32 width, u32 height) {
+static bool present(u32 origin, u32 width, u32 height);
+bool rdp_pica_present(u32 origin, u32 width, u32 height) {  // (the profiler's phase around it)
+    u8 phase = g_phase;
+    g_phase = PH_GPU;
+    bool r = present(origin, width, height);
+    g_phase = phase;
+    return r;
+}
+static bool present(u32 origin, u32 width, u32 height) {
     if (!g.ready) return false;
     Target* show = NULL;
     for (int i = 0; i < MAX_TARGETS; i++) {
@@ -574,7 +582,10 @@ bool rdp_pica_capture(u8* rgb, u32 width, u32 height) {
         g.capBuf = linearAlloc(TW * TH * 4);
         return false;  // from the next present on
     }
-    gspWaitForPPF();
+    // The copy queued with the last present done: a frame begun waits for the GPU to finish everything before it.
+    // (gspWaitForPPF here could wait forever for an interrupt citro3d's own frame end had already taken.)
+    if (g.frameOpen) { flush(); C3D_FrameEnd(0); g.frameOpen = false; }
+    frame_begin();
     GSPGPU_InvalidateDataCache(g.capBuf, TW * TH * 4);
     for (u32 y = 0; y < height && y < TH; y++)
         for (u32 x = 0; x < width && x < TW; x++) {

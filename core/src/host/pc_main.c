@@ -104,6 +104,7 @@ int main(int argc, char** argv) {
     int saveType = SAVE_EEPROM4K, cic = 0;
     u32 rdram = 8u << 20;
     bool stats = false, useJit = false, hash = false, sliceFields = false, ccCheck = false;
+    u64 disVa = 0, disN = 0;  // --disasm VA N: RDRAM disassembled at the end of the run
     for (int i = 1; i < argc; i++) {
         const char* a = argv[i];
         bool more = i + 1 < argc;
@@ -123,6 +124,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--stats")) stats = true;
         else if (!strcmp(a, "--jit")) useJit = true;
         else if (!strcmp(a, "--hash")) hash = true;
+        else if (!strcmp(a, "--disasm") && i + 2 < argc) { disVa = strtoull(argv[++i], NULL, 0); disN = strtoull(argv[++i], NULL, 0); }
         else if (!strcmp(a, "--cc-check")) {  // and the texture decoder against texel() during the run
             ccCheck = g_decodeCheckOn = true;
             const char* dp = getenv("N64_DECODE_PLANT");
@@ -239,6 +241,11 @@ int main(int argc, char** argv) {
 #undef MIX
         printf("state cycles %llu pc %08x regs %016llx all %016llx\n", (unsigned long long)g_cpu.cycles, (u32)g_cpu.pc,
                (unsigned long long)regs, (unsigned long long)h);
+    }
+    for (u64 k = 0; k < disN; k++) {
+        u32 va = (u32)disVa + 4 * (u32)k, op = m_r32(g_mem.rdram, va & (g_mem.rdramSize - 1) & ~3u);
+        char buf[96];
+        printf("%08x: %08x  %s\n", va, op, vr_disasm(op, (u64)(s64)(s32)va, buf, sizeof buf));
     }
     if (ccCheck && cc_check()) return 4;  // the PICA combiner against the reference (src/rdp/cc_check.c)
     if (g_untilIsv) {

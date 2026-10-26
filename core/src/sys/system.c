@@ -11,6 +11,8 @@ void rdp_soft_reset(void);
 
 void mi_reset(void);
 volatile bool g_quit;
+volatile u8 g_phase;
+volatile u32 g_phaseVa;
 
 bool sys_init(u32 rdramSize, int saveType) {
     free(g_mem.rdram);
@@ -54,6 +56,7 @@ void sys_run(u64 untilCycles) {
         u64 next = sched_next();
         if (next > untilCycles) next = untilCycles;
         vr_run(&g_cpu, next);
+        g_phase = PH_OTHER;
         if (g_cpuStop) break;
         sched_dispatch(g_cpu.cycles);
     }

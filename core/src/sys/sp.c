@@ -24,7 +24,16 @@ static u32 g_taskType;
 #define TASK_CYCLES_AUDIO 40000
 #define TASK_CYCLES_OTHER 40000
 
+static bool g_hleInFlight;     // a high-level graphics task submitted and not yet ended (emulated)
+static bool g_hleOutstanding;  // a high-level graphics task whose results were not taken yet
+static u64 g_hleNextCycles;    // RSP cycles the next high-level task takes: the previous task's estimate
+static bool g_hleNextSync, g_hleEndSync;  // the previous task ended with an RDP full sync; the running task's copy
+static void hle_take_results(void);
+
 void sp_reset(void) {
+    g_hleInFlight = g_hleOutstanding = false;
+    g_hleNextCycles = 200000;
+    g_hleNextSync = g_hleEndSync = true;
     g_memAddr = g_dramAddr = g_rdLen = g_wrLen = g_semaphore = g_pc = 0;
     g_status = SPS_HALT;
 }
@@ -84,17 +93,26 @@ static void task_start(void) {
                 (unsigned)(m_r32(g_mem.spmem, 0xFD0) & 0xFFFFFF), (unsigned)data, (unsigned)size, n ? s : "(no RSP string)");
     }
     if (g_hleGfx && g_taskType == 1) {
-        // High-level graphics microcode: the display list runs natively; the RDP's full sync interrupt and the
-        // microcode's HALT | BROKE | SIG2 come after an estimated run time, as with the interpreter.
-        u64 tris = g_hleStats.triangles;
-        g_rspRunning = true;
-        u64 t0 = host_ticks();
-        bool done = hle_gfx_task();
-        g_timeRsp += host_ticks() - t0;
-        g_rspRunning = false;
-        if (done) {
-            u64 ran = 2000 + hle_last_commands() * 40 + (g_hleStats.triangles - tris) * 150;
+        hle_take_results();  // the previous task finished (core 0 waits for a worker still running it)
+        if (hle_gfx_prepare()) {
+            // High-level graphics microcode: the display list runs natively, on core 2 when the host has a worker
+            // (g_hleAsync), else now. Its end (the microcode's HALT | BROKE | SIG2, and the RDP's full-sync interrupt
+            // when the previous task had one) comes after the previous task's estimated run time: the same on every
+            // host, as a worker may still be running this one when it ends (g_hleAhead).
+            u64 ran = g_hleNextCycles;
+            g_hleEndSync = g_hleNextSync;
             g_rspTotalCycles += ran;
+            if (g_hleAsync) {
+                g_hleAsync->submit();
+            } else {
+                u64 t0 = host_ticks();
+                u8 phase = g_phase;
+                g_phase = PH_HLE;
+                hle_gfx_run();
+                g_phase = phase;
+                g_timeRsp += host_ticks() - t0;
+            }
+            g_hleOutstanding = g_hleInFlight = true;
             g_rspBroke = g_hleDone = true;
             sched_at(EV_SP_TASK, g_cpu.cycles + ran * 3 / 2 + 1);
             return;
@@ -134,7 +152,38 @@ static void task_start(void) {
     sched_at(EV_SP_TASK, g_cpu.cycles + ran * 3 / 2 + 1);
 }
 
+// The finished high-level task's results: the next task's run time and whether its end raises the DP interrupt.
+// Taken when the next task starts (identically on every host); core 0 waits here for a worker still running it.
+static void hle_take_results(void) {
+    if (!g_hleOutstanding) return;
+    if (g_hleAsync) {
+        u8 phase = g_phase;
+        g_phase = PH_HLE;
+        g_hleAsync->wait();
+        g_phase = phase;
+    }
+    g_hleOutstanding = false;
+    g_hleNextSync = hle_last_full_sync();
+    g_hleNextCycles = 2000 + hle_last_commands() * 40 + hle_last_triangles() * 150;
+}
+
+// A high-level task's emulated end. Unless the host lets the CPU run ahead of the worker (g_hleAhead: the CPU may
+// then rewrite what the worker still reads, which is safe for games that double-buffer their display lists and with
+// a renderer that writes nothing to RDRAM), core 0 waits here for the worker.
+static void hle_task_end(void) {
+    if (!g_hleInFlight) return;
+    g_hleInFlight = false;
+    if (g_hleAsync && !g_hleAhead) {
+        u8 phase = g_phase;
+        g_phase = PH_HLE;
+        g_hleAsync->wait();
+        g_phase = phase;
+    }
+    if (g_hleEndSync) g_dpIntrPending = true;
+}
+
 void sp_task_done(void) {
+    hle_task_end();
     if (g_rspMode == RSP_LLE || g_hleDone) {  // the interpreter ran it, or the high-level microcode did
         if (g_rspBroke) {
             g_status |= SPS_HALT | SPS_BROKE;
@@ -197,7 +246,7 @@ void sp_write(u32 reg, u32 v, u32 mask) {
             break;
         }
         if (wasHalted && !(g_status & SPS_HALT)) task_start();
-        else if (!wasHalted && (g_status & SPS_HALT) && g_rspMode == RSP_STUB) { sched_cancel(EV_SP_TASK); g_hleDone = g_rspBroke = false; }
+        else if (!wasHalted && (g_status & SPS_HALT) && g_rspMode == RSP_STUB) { sched_cancel(EV_SP_TASK); hle_task_end(); g_hleDone = g_rspBroke = false; }
         break;
     }
     case 0x1C: g_semaphore = 0; break;

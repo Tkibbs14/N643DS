@@ -4,6 +4,30 @@ Console measurements, newest first: relay jobs on the owner's New 2DS XL (`tools
 job's perf.csv (10 s rows; `speed_pct` is emulated time over real time). The RSP is still a stub (tasks complete
 after a fixed time, nothing is drawn), so these are CPU-side figures, not playable speed.
 
+## The FPU in the JIT, and where the time goes (2026-10-25, night)
+
+Super Mario 64, title head scene, `--jit on --gfx hle --gpu on`, 60 s runs. `--profile on` samples core 0's phase
+every ~100 us from core 1 (core/host3ds/profile.c).
+
+| Job | Change | Speed | Profile |
+|---|---|---|---|
+| 1472 | (before) | 23.8% | |
+| 1474 | COP1 arithmetic, compares, conversions, CFC1 / CTC1 and BC1 translated | 24.0% | |
+| 1475 | (same build, profiled) | 23.9% | compiled 47.2%, interpreter 29.5%, HLE graphics 18.1%, dispatcher 3.9% |
+| 1476 | the FPU fast path also with FCR31's V / Z / O enables set | 30.5% | compiled 65.1%, interpreter 5.0%, HLE graphics 23.4%, dispatcher 5.0% |
+| 1477 | graphics tasks on core 2, the CPU waiting at each task's end (`--async on`) | 31.1% | core 0 waited 13.6 s for 14.3 s of worker time: SM64 idles right after submitting a task |
+| 1478 | the CPU running on past a task's end (`--async ahead`) | 41-43% | compiled 85.7%, interpreter 6.9%, dispatcher 6.1%; core 0 waited 0.46 s, the worker busy 19.2 s |
+
+- Job 1475's interpreter time was SM64's matrix code (MUL.S / ADD.S at 0x80196570...): the fast path refused every
+  operation because SM64 runs with FCR31 = V, Z and O enabled. Only the inexact enable matters to the fast path (it
+  completes only when the host raised none of the others).
+- Job 1479 (Mario Kart 64, `--async ahead`) hung the 2DS between 10 and 20 s, where the title shows frames without a GPU
+  target and the main thread drew RDRAM to the screen while the worker drove the GPU. Since then the main thread
+  waits for the worker before drawing RDRAM, and the relay read-back no longer waits for a PPF interrupt;
+  not yet re-measured.
+- The "interpreted" figure in the JIT statistics counts the slow-path stubs of guarded translations too (every
+  load and store has one); the profile's interpreter share is the measure.
+
 ## Graphics: HLE and the PICA renderer on the 2DS (2026-10-25, late)
 
 Super Mario 64, `--jit on`, settled speed in the title's Mario-head scene (the logos before it run at ~50%). Audio

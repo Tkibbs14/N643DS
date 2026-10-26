@@ -10,9 +10,12 @@ core="$(cd "$(dirname "$0")/.." && pwd)"
 bash "$core/tools/arm_build.sh" > /dev/null
 run() { qemu-arm -L /usr/arm-linux-gnueabihf -cpu cortex-a7 "$core/build-arm/n64emu" "$@"; }
 fail=0
-if [ "${1:-}" = plant ]; then  # the planted JIT bug (N64_PLANT=6) must make the check fail
-    if N64_PLANT=6 bash "$0" > /dev/null 2>&1; then echo "PLANT 6 NOT CAUGHT"; exit 1; fi
-    echo "plant 6 caught"; exit 0
+if [ "${1:-}" = plant ]; then  # each planted JIT bug (6: ADDU, 7: ADD.S) must make the check fail
+    for p in 6 7; do
+        if N64_PLANT=$p bash "$0" > /dev/null 2>&1; then echo "PLANT $p NOT CAUGHT"; exit 1; fi
+        echo "plant $p caught"
+    done
+    exit 0
 fi
 if [ $# = 0 ]; then
     set -- "$core"/build/tests/cpu/*.rom/*.z64

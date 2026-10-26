@@ -1,8 +1,9 @@
 # N643DS handoff (started 2026-10-25, newest state first)
 
 > **▶ Current state (2026-10-25, night).** Graphics run natively: a high-level graphics microcode and a PICA200
-> renderer. On the 2DS's own GPU Super Mario 64's title runs at ~24% (job 1472) and Mario Kart 64's at ~48% (job
-> 1471); games started from the 2DS menu use it (relay jobs: `--gfx hle --gpu on`).
+> renderer. On the 2DS's own GPU Super Mario 64's title runs at ~31% (job 1476), ~42% with graphics on core 2 running
+> ahead (`--async ahead`, job 1478: off by default until Mario Kart 64's hang in that mode, job 1479, is resolved);
+> Mario Kart 64's title at ~48% (job 1471). Games started from the 2DS menu use the GPU path (relay: `--gfx hle --gpu on`).
 > - **Graphics HLE** (`src/hle/gfx.c`): F3D (Fast3D 2.0D / 2.0G), F3DEX 0.95 / 1.x, F3DEX2 / F3DZEX, plus Wave Race 64's
 >   variant (indices x5, picked by a hash of the microcode text) and GoldenEye's TRI4. Per task against the
 >   interpreter (`n64emu --gfx compare`, 600 fields), clearly different pixels: SM64 1.09%, MK64 0.42%, OoT 0.32%,
@@ -20,13 +21,14 @@
 
 ## Next steps, in order
 
-1. **CPU speed** (SM64 is CPU-bound now: job 1472, half the JIT's compiled instructions interpreted): JIT FPU
-   arithmetic, then a register cache and block linking. Graphics on another core (the HLE task on core 2) after.
-2. **GPU renderer coverage:** pictures back to RDRAM when the CPU or a texture reads them, the 2-cycle fog blend as a
+1. **`--async ahead` on Mario Kart 64** (job 1479 hung; fixes in, not re-measured), then make it the default by hand.
+2. **CPU speed** (job 1478: core 0 85.7% in compiled code): a register cache, block linking (dispatcher 6.1%),
+   the remaining interpreter time (SM64 0x8018e000, 0x80193464...).
+3. **GPU renderer coverage:** pictures back to RDRAM when the CPU or a texture reads them, the 2-cycle fog blend as a
    TEV stage, the interpreter's triangles (microcodes the HLE does not know: Diddy Kong Racing, Banjo-Kazooie).
-3. **Audio HLE** (the standard ABI, compared sample for sample with the interpreter) and output through ndsp.
-4. **Exact HLE:** the microcodes' fixed-point arithmetic (F3DEX2 disassembly) so the RDP command stream matches.
-5. RDP accuracy (PeterLemon's RDP ROMs, the 474 vs 480 rows), Banjo-Kazooie, PI DMA alignment, n64-systemtest;
+4. **Audio HLE** (the standard ABI, compared sample for sample with the interpreter) and output through ndsp.
+5. **Exact HLE:** the microcodes' fixed-point arithmetic (F3DEX2 disassembly) so the RDP command stream matches.
+6. RDP accuracy (PeterLemon's RDP ROMs, the 474 vs 480 rows), Banjo-Kazooie, PI DMA alignment, n64-systemtest;
    SM64's moustache missing in one head pose on the GPU path; MK64's Nintendo logo missing on the GPU path.
 
 ## Owner decisions (2026-10-25)

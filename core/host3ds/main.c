@@ -22,6 +22,8 @@
 #include "../src/jit/jit.h"
 #include "../src/hle/hle.h"
 #include "rdp_pica.h"
+#include "profile.h"
+#include "hle_worker.h"
 
 #define ROM_DIR "sdmc:/n643ds/roms"
 #define PERF_PATH "sdmc:/n643ds/perf.csv"
@@ -37,6 +39,9 @@ static bool g_ranGame;       // a cartridge ran in this process (the next relay 
 static int g_showEvery = 2;  // copy the VI picture to the top screen every N fields
 static bool g_gpuOk;         // citro3d set up (rdp_pica_init)
 static bool g_gpu;           // the RDP on the GPU for this run (--gpu on)
+static bool g_profile;       // sample where the time goes (--profile on, profile.c)
+static bool g_workerOk;      // the core-2 worker runs (hle_worker.c)
+static bool g_async;         // graphics tasks and presents on it (--async on)
 static volatile bool g_stopRun, g_stopJob;  // live command "stop": this run, and the rest of the job
 static char g_isvLine[512];
 static size_t g_isvLen;
@@ -140,7 +145,13 @@ static void on_field(void) {
     if (g_gpu) {
         u32 w = g_vi.width, vs = (g_vi.vStart >> 16) & 0x3FF, ve = g_vi.vStart & 0x3FF, lines = ve > vs ? (ve - vs) / 2 : 240;
         u32 h = (g_vi.yScale & 0xFFF) ? lines * (g_vi.yScale & 0xFFF) / 1024 : 240;
-        if (w && w <= 1024 && h && h <= 1024 && rdp_pica_present(g_vi.origin & 0xFFFFFF, w, h)) return;
+        if (w && w <= 1024 && h && h <= 1024) {
+            if (g_async) {  // queued behind the graphics tasks; RDRAM shown when the last present found no target
+                worker_present(g_vi.origin & 0xFFFFFF, w, h);
+                if (worker_last_present_shown()) return;
+                worker_wait();  // no target: RDRAM shown from this thread, which must not meet the worker's GPU calls
+            } else if (rdp_pica_present(g_vi.origin & 0xFFFFFF, w, h)) return;
+        }
     }
     show_picture();
 }
@@ -167,6 +178,7 @@ static void send_frame(void) {
     memcpy(b + 22, &h, 4);
     b[26] = 1; b[28] = 24;
     u8* gpu = NULL;
+    if (g_async) worker_wait();  // the read-back after the presents queued
     if (g_gpu && (gpu = malloc(w * h * 3)) && !rdp_pica_capture(gpu, w, h)) { free(gpu); gpu = NULL; }
     if (gpu) {  // the GPU's picture (the first shot of a run only arms the read-back and sends RDRAM's)
         for (u32 y = 0; y < h; y++)
@@ -245,9 +257,11 @@ static const char* run_loaded(u32 seconds, bool interactive) {
     g_pad[0].present = true;  // a controller is plugged in, also in relay runs (no input)
     sys_reset();
     rom_boot_hle();
+    memset(&g_workerStats, 0, sizeof g_workerStats);
     g_ranGame = true;
     logf_("# rom \"%s\" %.4s cic %d, entry %08lx\n", g_rom.name, g_rom.code, g_rom.cic, (unsigned long)g_rom.entry);
     logf_("t_s,fields,emu_s,speed_pct,mips\n");
+    if (g_profile) profile_start();
     u64 t0 = svcGetSystemTick(), lastT = t0, lastFields = 0, lastIns = 0, lastCyc = 0, lastShot = t0;
     g_fieldMark = 0;
     for (;;) {
@@ -280,6 +294,8 @@ static const char* run_loaded(u32 seconds, bool interactive) {
         if (seconds && now - t0 >= (u64)seconds * SYSCLOCK_ARM11) break;
     }
     (void)lastFields;
+    if (g_async) worker_wait();
+    if (g_profile) profile_stop(logf_);
     logf_("# end: %llu instructions, %llu fields, %.3f emulated s in %.1f s; pc %08lx\n",
           (unsigned long long)g_cpu.cycles, (unsigned long long)g_stats.fields, (double)g_cpu.cycles / CPU_HZ,
           (double)(svcGetSystemTick() - t0) / SYSCLOCK_ARM11, (unsigned long)(u32)g_cpu.pc);
@@ -302,6 +318,9 @@ static const char* run_loaded(u32 seconds, bool interactive) {
               (unsigned long long)g_picaStats.texDecodes, (unsigned long long)g_picaStats.presents,
               (unsigned long long)g_picaStats.splits, (unsigned long long)g_picaStats.approxDraws,
               (unsigned long long)g_picaStats.lleTriangles);
+    if (g_async)
+        logf_("# worker (core 2): busy %.2f s, core 0 waiting for it %.2f s\n",
+              (double)g_workerStats.busyTicks / SYSCLOCK_ARM11, (double)g_workerStats.waitTicks / SYSCLOCK_ARM11);
     if (g_gpu)
         logf_("# gpu time: texture lookups %.2f s, state and draw calls %.2f s; %llu texels decoded, %llu textures "
               "allocated, %llu MB of TMEM hashed\n", (double)g_picaStats.lookupTicks / SYSCLOCK_ARM11,
@@ -316,6 +335,7 @@ static bool load_rom(const char* path) {
     if (!sys_init(8u << 20, SAVE_EEPROM4K)) { logf_("# out of memory for RDRAM\n"); return false; }
     rdp_pica_reset();
     rdp_pica_attach(g_gpu);
+    worker_attach(g_async);
     if (!rom_load(path)) { logf_("# cannot load %s\n", path); return false; }
     return true;
 }
@@ -548,6 +568,9 @@ static void remote_mode(const char* selfPath) {
         g_gpu = g_gpuOk && g_hleGfx && opt_str(job.args, "--gpu", val, sizeof val) && !strcmp(val, "on");
         g_picaTexDumpN = opt_str(job.args, "--texdump", val, sizeof val) ? atoi(val) : 0;
         g_picaTexDump = tex_dump;
+        g_profile = opt_str(job.args, "--profile", val, sizeof val) && !strcmp(val, "on");
+        g_async = g_workerOk && g_gpu && opt_str(job.args, "--async", val, sizeof val) && (!strcmp(val, "on") || !strcmp(val, "ahead"));
+        g_hleAhead = g_async && !strcmp(val, "ahead");  // the CPU runs on past a task's end (src/sys/sp.c)
         g_picaLogN = opt_str(job.args, "--drawlog", val, sizeof val) ? atoi(val) : 0;
         g_picaLog = pica_log;
         g_shotSecs = 0;
@@ -642,6 +665,7 @@ int main(int argc, char** argv) {
     gfxSetDoubleBuffering(GFX_TOP, false);
     consoleInit(GFX_BOTTOM, &g_con);
     g_gpuOk = rdp_pica_init();
+    g_workerOk = g_gpuOk && worker_start();
     g_hleTimeRdp = false;  // two svcGetSystemTick calls per RDP command: ~1.8 M syscalls in job 1462's 40 s
     romfsInit();
     mkdir("sdmc:/n643ds", 0777);

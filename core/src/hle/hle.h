@@ -24,3 +24,13 @@ extern bool g_hleCompare;
 // command's id (4 shade, 2 texture, 1 z-buffer), tile in bits 8-10. The state is g_rdp's at the call.
 typedef struct { float sx, sy, sz, w, s, t, r, g, b, a; } HleVtx;  // s, t in 10.5 texel units; w > 0 (clip w)
 extern void (*g_hleVtxSink)(const HleVtx* v, int n, u32 flags);
+
+// A task in halves (gfx.c): prepare on core 0 at the task's start (false: unknown microcode), run anywhere after.
+bool hle_gfx_prepare(void);
+void hle_gfx_run(void);
+u64 hle_last_triangles(void);
+bool hle_last_full_sync(void);  // the task ended with an RDP full sync (its DP interrupt comes with the task's end)
+// A host's worker for hle_gfx_run (core/host3ds/hle_worker.c; NULL: it runs at once, on core 0)
+typedef struct { void (*submit)(void); void (*wait)(void); } HleAsync;
+extern const HleAsync* g_hleAsync;
+extern bool g_hleAhead;  // the CPU does not wait for the worker at a task's end (src/sys/sp.c hle_task_end)

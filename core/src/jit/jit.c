@@ -121,7 +121,7 @@ static void ldrb_lsr12(Emit* e, int rt, int rn, int rm) {  // ldrb rt, [rn, rm, 
     E(e, cc(C_AL) | 0x07D00000u | ((u32)rn << 16) | ((u32)rt << 12) | (12u << 7) | ((u32)LSR << 5) | (u32)rm);
 }
 static void imm_op(Emit* e, int opc, int s, int rd, int rn, u32 v, int tmp) {  // rd = rn OP v
-    u32 enc;
+    u32 enc = 0;
     if (arm_imm(v, &enc)) { dp_imm(e, opc, s, rd, rn, enc); return; }
     load_const(e, tmp, v);
     dp_reg(e, opc, s, rd, rn, tmp);
@@ -157,7 +157,7 @@ static void epilogue(Emit* e) {
 
 // c->cycles = entry + count
 static void emit_cycles(Emit* e, u32 count) {
-    u32 enc;
+    u32 enc = 0;
     arm_imm(count, &enc);  // count <= MAX_INSNS + 1 always encodes
     dp_imm(e, ADD, 1, R0, R6, enc);
     dp_imm(e, ADC, 0, R1, R7, 0);
@@ -227,13 +227,13 @@ static u32 emit_address(Ctx* x, u32 op, int size, bool store, u32* slow) {
     dp_reg_c(e, C_AL, CMP, 1, 0, R1, R0, ASR, 31);
     slow[ns++] = branch_c(e, C_NE, 0);
     if (imm) {
-        u32 enc;
+        u32 enc = 0;
         if (imm > 0 && arm_imm((u32)imm, &enc)) dp_imm(e, ADD, 1, R0, R0, enc);
         else if (imm < 0 && arm_imm((u32)-imm, &enc)) dp_imm(e, SUB, 1, R0, R0, enc);
         else { load_const(e, R2, (u32)imm); dp_reg(e, ADD, 1, R0, R0, R2); }
         slow[ns++] = branch_c(e, C_VS, 0);
     }
-    u32 enc;
+    u32 enc = 0;
     arm_imm(0xC0000000u, &enc);
     dp_imm(e, AND, 0, R2, R0, enc);
     arm_imm(0x80000000u, &enc);
@@ -323,6 +323,317 @@ static void emit_mem(Ctx* x, u32 op, u32 i, bool inDelay) {
     patch_branch(e, done, e->n);
 }
 
+
+// ---- Floating point ------------------------------------------------------------------------------------------------
+// COP1 arithmetic, compares and conversions natively in the cases vr4300_fpu.c handles as plain IEEE operations:
+// round to nearest and the inexact exception disabled in FCR31, normal or zero operands, and none of invalid, division by zero,
+// overflow or underflow raised by the host (nor a denormal result). FCR31 then changes only as the interpreter changes
+// it: Cause cleared, then Cause.I and Flags.I when the host raised inexact. Everything else (denormals, NaNs,
+// infinities, the other rounding modes, enabled exceptions) branches to the slow path, the interpreter's code, which
+// starts again from the untouched registers. The host's FPSCR flags are cleared before each such operation (and its
+// rounding mode set to nearest); the interpreter sets its own (fesetround, feclearexcept) for every operation.
+#define OFF_FCR31 ((u32)offsetof(Vr, fcr31))
+#define SLOW(cond) do { if (ns < 8) slow[ns++] = branch_c(e, cond, 0); } while (0)
+
+// A single's bits in v: normal or zero, else slow (t1, t2 scratch)
+static void guard_s(Emit* e, int v, int t1, int t2, u32* slow, u32* nsp) {
+    u32 ns = *nsp, enc = 0;
+    mov_shift(e, 0, t1, v, LSL, 1);           // the sign dropped
+    dp_imm(e, SUB, 0, t2, t1, 1);
+    arm_imm(0x01000000u, &enc);
+    dp_imm(e, CMP, 1, 0, t2, enc);            // 0 < x <= 0x01000000: a denormal (and the smallest normal: harmless)
+    SLOW(C_CC);
+    dp_imm(e, CMN, 1, 0, t1, enc);            // x >= 0xFF000000: infinity or NaN
+    SLOW(C_CS);
+    *nsp = ns;
+}
+
+// A double's high word h and low word l: normal or zero, else slow
+static void guard_d(Emit* e, int h, int l, int t1, int t2, u32* slow, u32* nsp) {
+    u32 ns = *nsp, enc = 0;
+    mov_shift(e, 0, t1, h, LSL, 1);
+    arm_imm(0x00200000u, &enc);
+    dp_imm(e, CMN, 1, 0, t1, enc);            // exponent all ones
+    SLOW(C_CS);
+    dp_imm(e, CMP, 1, 0, t1, enc);
+    u32 normal = branch_c(e, C_CS, 0);        // exponent not zero
+    dp_reg(e, ORR, 1, t2, t1, l);             // exponent zero: a denormal unless the mantissa is zero too
+    SLOW(C_NE);
+    patch_branch(e, normal, e->n);
+    *nsp = ns;
+}
+
+// No NaN (compares accept denormals: the interpreter compares them on the host as they are)
+static void guard_nan_s(Emit* e, int v, int t1, u32* slow, u32* nsp) {
+    u32 ns = *nsp, enc = 0;
+    mov_shift(e, 0, t1, v, LSL, 1);
+    arm_imm(0x01000000u, &enc);
+    dp_imm(e, CMN, 1, 0, t1, enc);
+    SLOW(C_CS);
+    *nsp = ns;
+}
+static void guard_nan_d(Emit* e, int h, int t1, u32* slow, u32* nsp) {
+    u32 ns = *nsp, enc = 0;
+    mov_shift(e, 0, t1, h, LSL, 1);
+    arm_imm(0x00200000u, &enc);
+    dp_imm(e, CMN, 1, 0, t1, enc);
+    SLOW(C_CS);
+    *nsp = ns;
+}
+
+// FCR31 into r0: round to nearest and the inexact exception not enabled, else slow. The other enables do not matter
+// here: the fast path completes only when the host raised none of invalid, division by zero, overflow and underflow,
+// so inexact is the only Cause it can set (Super Mario 64 runs with V, Z and O enabled: job 1475)
+static void guard_fcr(Emit* e, u32* slow, u32* nsp) {
+    u32 ns = *nsp;
+    ldr_imm(e, R0, R11, OFF_FCR31);
+    dp_imm(e, TST, 1, 0, R0, 0x83);
+    SLOW(C_NE);
+    *nsp = ns;
+}
+
+static void host_flags_clear(Emit* e, int t) {
+    u32 enc = 0;
+    vmrs_r(e, t);
+    dp_imm(e, BIC, 0, t, t, 0x9F);            // the cumulative exception flags
+    arm_imm(0x00C00000u, &enc);
+    dp_imm(e, BIC, 0, t, t, enc);             // round to nearest
+    vmsr_fpscr(e, t);
+}
+
+// The host's flags into t: invalid, division by zero, overflow or underflow go slow
+static void host_flags_check(Emit* e, int t, u32* slow, u32* nsp) {
+    u32 ns = *nsp;
+    vmrs_r(e, t);
+    dp_imm(e, TST, 1, 0, t, 0x0F);
+    SLOW(C_NE);
+    *nsp = ns;
+}
+
+// FCR31 (r0) after an operation: Cause cleared, then I in Cause and Flags if the host's flags (t) say inexact
+static void fcr_finish(Emit* e, int t) {
+    u32 enc = 0;
+    arm_imm(0x3F000u, &enc);
+    dp_imm(e, BIC, 0, R0, R0, enc);
+    if (t >= 0) {
+        dp_imm(e, TST, 1, 0, t, 0x10);
+        arm_imm(0x1000u, &enc);
+        dp_imm_c(e, C_NE, ORR, 0, R0, R0, enc);
+        dp_imm_c(e, C_NE, ORR, 0, R0, R0, 4);
+    }
+    str_imm(e, R0, R11, OFF_FCR31);
+}
+
+static void slow_path(Ctx* x, u32 op, u32 i, bool inDelay, u32* slow, u32 ns) {
+    Emit* e = &x->e;
+    u32 done = branch_c(e, C_AL, 0);
+    for (u32 k = 0; k < ns; k++) patch_branch(e, slow[k], e->n);
+    emit_fallback(x, op, i, inDelay);
+    patch_branch(e, done, e->n);
+}
+
+// COP1 formats S / D / W (fmt 16, 17, 20): true when translated (with CU1 set when compiled)
+static bool emit_fpu(Ctx* x, u32 op, u32 i, bool inDelay) {
+    Emit* e = &x->e;
+    u32 fmt = (op >> 21) & 31, fn = op & 63, enc = 0;
+    int fs = (op >> 11) & 31, ft = (op >> 16) & 31, fd = (op >> 6) & 31;
+    u32 slow[8], ns = 0;
+    if (UNLIKELY(g_plant == 7) && fmt == 16 && fn == 0) fn = 1;  // planted bug: ADD.S as SUB.S (jit_check.sh must catch it)
+    if (fmt == 16) {
+        if (fn <= 7) {  // ADD SUB MUL DIV SQRT ABS MOV NEG .S
+            if (fn == 6) { ldr_imm(e, R1, R11, off_fpr_w(x, fs)); str_imm(e, R1, R11, off_fpr_w(x, fd)); return true; }
+            ldr_imm(e, R1, R11, off_fpr_w(x, fs));
+            guard_s(e, R1, R12, LR, slow, &ns);
+            if (fn == 5 || fn == 7) {  // ABS / NEG: no host flags, Cause cleared
+                ldr_imm(e, R0, R11, OFF_FCR31);
+                if (fn == 5) { mov_shift(e, 0, R1, R1, LSL, 1); mov_shift(e, 0, R1, R1, LSR, 1); }
+                else { arm_imm(0x80000000u, &enc); dp_imm(e, EOR, 0, R1, R1, enc); }
+                fcr_finish(e, -1);
+                str_imm(e, R1, R11, off_fpr_w(x, fd));
+                slow_path(x, op, i, inDelay, slow, ns);
+                return true;
+            }
+            guard_fcr(e, slow, &ns);
+            if (fn <= 3) { ldr_imm(e, R2, R11, off_fpr_w(x, ft)); guard_s(e, R2, R12, LR, slow, &ns); }
+            host_flags_clear(e, R3);
+            vmov_s_r(e, 0, R1);
+            if (fn <= 3) {
+                static const u32 ops[4] = {VF_ADD, VF_SUB, VF_MUL, VF_DIV};
+                vmov_s_r(e, 1, R2);
+                vfp_s(e, ops[fn], 0, 0, 1);
+            } else {
+                vsqrt_s(e, 0, 0);
+            }
+            host_flags_check(e, R3, slow, &ns);
+            vmov_r_s(e, R1, 0);
+            guard_s(e, R1, R12, LR, slow, &ns);  // a denormal result (exact, so no underflow flag) is unimplemented
+            fcr_finish(e, R3);
+            str_imm(e, R1, R11, off_fpr_w(x, fd));
+            slow_path(x, op, i, inDelay, slow, ns);
+            return true;
+        }
+        if (fn >= 0x30) {  // C.cond.S
+            ldr_imm(e, R1, R11, off_fpr_w(x, fs));
+            ldr_imm(e, R2, R11, off_fpr_w(x, ft));
+            guard_nan_s(e, R1, R12, slow, &ns);
+            guard_nan_s(e, R2, R12, slow, &ns);
+            vmov_s_r(e, 0, R1);
+            vmov_s_r(e, 1, R2);
+            vcmp_s(e, 0, 1);
+            goto compare_done;
+        }
+        if (fn == 0x0C || fn == 0x0D || fn == 0x24) {  // ROUND / TRUNC / CVT .W.S
+            ldr_imm(e, R1, R11, off_fpr_w(x, fs));
+            guard_s(e, R1, R12, LR, slow, &ns);
+            guard_fcr(e, slow, &ns);
+            host_flags_clear(e, R3);
+            vmov_s_r(e, 0, R1);
+            if (fn == 0x0D) vcvt_s32_f32(e, 0, 0);
+            else vcvtr_s32_f32(e, 0, 0);
+            goto to_word;
+        }
+        if (fn == 0x21) {  // CVT.D.S: exact
+            ldr_imm(e, R1, R11, off_fpr_w(x, fs));
+            guard_s(e, R1, R12, LR, slow, &ns);
+            ldr_imm(e, R0, R11, OFF_FCR31);
+            vmov_s_r(e, 0, R1);
+            vcvt_f64_f32(e, 1, 0);
+            vmov_rr_d(e, R1, R2, 1);
+            fcr_finish(e, -1);
+            str_imm(e, R1, R11, off_fpr_d(x, fd));
+            str_imm(e, R2, R11, off_fpr_d(x, fd) + 4);
+            slow_path(x, op, i, inDelay, slow, ns);
+            return true;
+        }
+        return false;
+    }
+    if (fmt == 17) {
+        if (fn <= 7) {
+            if (fn == 6) {
+                ldr_imm(e, R1, R11, off_fpr_d(x, fs)); ldr_imm(e, R2, R11, off_fpr_d(x, fs) + 4);
+                str_imm(e, R1, R11, off_fpr_d(x, fd)); str_imm(e, R2, R11, off_fpr_d(x, fd) + 4);
+                return true;
+            }
+            ldr_imm(e, R1, R11, off_fpr_d(x, fs));
+            ldr_imm(e, R2, R11, off_fpr_d(x, fs) + 4);
+            guard_d(e, R2, R1, R12, LR, slow, &ns);
+            if (fn == 5 || fn == 7) {
+                ldr_imm(e, R0, R11, OFF_FCR31);
+                if (fn == 5) { mov_shift(e, 0, R2, R2, LSL, 1); mov_shift(e, 0, R2, R2, LSR, 1); }
+                else { arm_imm(0x80000000u, &enc); dp_imm(e, EOR, 0, R2, R2, enc); }
+                fcr_finish(e, -1);
+                str_imm(e, R1, R11, off_fpr_d(x, fd));
+                str_imm(e, R2, R11, off_fpr_d(x, fd) + 4);
+                slow_path(x, op, i, inDelay, slow, ns);
+                return true;
+            }
+            guard_fcr(e, slow, &ns);
+            vmov_d_rr(e, 1, R1, R2);
+            if (fn <= 3) {
+                ldr_imm(e, R1, R11, off_fpr_d(x, ft));
+                ldr_imm(e, R2, R11, off_fpr_d(x, ft) + 4);
+                guard_d(e, R2, R1, R12, LR, slow, &ns);
+                vmov_d_rr(e, 2, R1, R2);
+            }
+            host_flags_clear(e, R3);
+            if (fn <= 3) {
+                static const u32 ops[4] = {VF_ADD, VF_SUB, VF_MUL, VF_DIV};
+                vfp_d(e, ops[fn], 1, 1, 2);
+            } else {
+                vsqrt_d(e, 1, 1);
+            }
+            host_flags_check(e, R3, slow, &ns);
+            vmov_rr_d(e, R1, R2, 1);
+            guard_d(e, R2, R1, R12, LR, slow, &ns);
+            fcr_finish(e, R3);
+            str_imm(e, R1, R11, off_fpr_d(x, fd));
+            str_imm(e, R2, R11, off_fpr_d(x, fd) + 4);
+            slow_path(x, op, i, inDelay, slow, ns);
+            return true;
+        }
+        if (fn >= 0x30) {  // C.cond.D
+            ldr_imm(e, R1, R11, off_fpr_d(x, fs));
+            ldr_imm(e, R2, R11, off_fpr_d(x, fs) + 4);
+            guard_nan_d(e, R2, R12, slow, &ns);
+            vmov_d_rr(e, 1, R1, R2);
+            ldr_imm(e, R1, R11, off_fpr_d(x, ft));
+            ldr_imm(e, R2, R11, off_fpr_d(x, ft) + 4);
+            guard_nan_d(e, R2, R12, slow, &ns);
+            vmov_d_rr(e, 2, R1, R2);
+            vcmp_d(e, 1, 2);
+            goto compare_done;
+        }
+        if (fn == 0x0C || fn == 0x0D || fn == 0x24 || fn == 0x20) {  // ROUND / TRUNC / CVT .W.D, CVT.S.D
+            ldr_imm(e, R1, R11, off_fpr_d(x, fs));
+            ldr_imm(e, R2, R11, off_fpr_d(x, fs) + 4);
+            guard_d(e, R2, R1, R12, LR, slow, &ns);
+            guard_fcr(e, slow, &ns);
+            host_flags_clear(e, R3);
+            vmov_d_rr(e, 1, R1, R2);
+            if (fn == 0x20) {
+                vcvt_f32_f64(e, 0, 1);
+                host_flags_check(e, R3, slow, &ns);
+                vmov_r_s(e, R1, 0);
+                guard_s(e, R1, R12, LR, slow, &ns);
+                fcr_finish(e, R3);
+                str_imm(e, R1, R11, off_fpr_w(x, fd));
+                slow_path(x, op, i, inDelay, slow, ns);
+                return true;
+            }
+            if (fn == 0x0D) vcvt_s32_f64(e, 0, 1);
+            else vcvtr_s32_f64(e, 0, 1);
+            goto to_word;
+        }
+        return false;
+    }
+    if (fmt == 20 && (fn == 0x20 || fn == 0x21)) {  // CVT.S.W (the host rounds to nearest as int_to_fp does) / CVT.D.W
+        ldr_imm(e, R1, R11, off_fpr_w(x, fs));
+        if (fn == 0x20) { guard_fcr(e, slow, &ns); host_flags_clear(e, R3); }
+        else ldr_imm(e, R0, R11, OFF_FCR31);
+        vmov_s_r(e, 0, R1);
+        if (fn == 0x20) {
+            vcvt_f32_s32(e, 0, 0);
+            vmrs_r(e, R3);
+            vmov_r_s(e, R1, 0);
+            fcr_finish(e, R3);
+            str_imm(e, R1, R11, off_fpr_w(x, fd));
+        } else {
+            vcvt_f64_s32(e, 1, 0);
+            vmov_rr_d(e, R1, R2, 1);
+            fcr_finish(e, -1);
+            str_imm(e, R1, R11, off_fpr_d(x, fd));
+            str_imm(e, R2, R11, off_fpr_d(x, fd) + 4);
+        }
+        slow_path(x, op, i, inDelay, slow, ns);
+        return true;
+    }
+    return false;
+
+to_word:  // a conversion to a 32-bit integer in s0: out of range raises invalid (slow); inexact sets I
+    host_flags_check(e, R3, slow, &ns);
+    vmov_r_s(e, R1, 0);
+    fcr_finish(e, R3);
+    str_imm(e, R1, R11, off_fpr_w(x, fd));
+    slow_path(x, op, i, inDelay, slow, ns);
+    return true;
+
+compare_done: {  // the condition (fn & 15: 4 less, 2 equal; unordered went slow) into FCR31.C, Cause cleared
+        u32 cond = fn & 15;
+        vmrs_apsr(e);
+        load_const(e, R12, 0);
+        if (cond & 4) dp_imm_c(e, C_MI, MOV, 0, R12, 0, 1);
+        if (cond & 2) dp_imm_c(e, C_EQ, MOV, 0, R12, 0, 1);
+        ldr_imm(e, R0, R11, OFF_FCR31);
+        arm_imm(0x00800000u, &enc);
+        dp_imm(e, BIC, 0, R0, R0, enc);
+        dp_imm(e, CMP, 1, 0, R12, 0);
+        dp_imm_c(e, C_NE, ORR, 0, R0, R0, enc);
+        fcr_finish(e, -1);
+        slow_path(x, op, i, inDelay, slow, ns);
+        return true;
+    }
+}
+#undef SLOW
 // ---- Instructions --------------------------------------------------------------------------------------------------
 static bool is_branch(u32 op) {
     u32 p = op >> 26;
@@ -335,7 +646,8 @@ static bool is_branch(u32 op) {
 // N64_JIT_OFF=mask (debugging): instruction classes sent to the interpreter instead of translated, to find which
 // translation differs. 1 SLL/SRL/SRA, 2 HI/LO moves, 4 MULT(U), 8 ADDU/SUBU, 16 AND/OR/XOR/NOR, 32 SLT(U),
 // 64 DADDU/DSUBU, 128 64-bit shifts, 256 ADDIU/DADDIU, 512 SLTI(U), 1024 ANDI/ORI/XORI, 2048 LUI, 4096 loads,
-// 8192 stores, 16384 LW / LWU, 32768 LD, 65536 trapping add / sub, 131072 variable shifts, 262144 FPU moves and memory.
+// 8192 stores, 16384 LW / LWU, 32768 LD, 65536 trapping add / sub, 131072 variable shifts, 262144 FPU moves and memory,
+// 524288 FPU arithmetic, compares and conversions (emit_fpu), 1048576 BC1.
 static u32 op_class(u32 op) {
     u32 p = op >> 26, f = op & 63;
     if (p == 0) {
@@ -550,9 +862,41 @@ static void emit_insn(Ctx* x, u32 op, u32 i, bool inDelay) {
         patch_branch(e, done, e->n);
         return;
     }
-    case 0x11: {  // COP1 moves, with CU1 set when compiled (otherwise the interpreter raises CpU)
+    case 0x11: {  // COP1, with CU1 set when compiled (otherwise the interpreter raises CpU)
         u32 fmt = (op >> 21) & 31;
-        if (!x->cu1 || (fmt != 0 && fmt != 1 && fmt != 4 && fmt != 5)) break;
+        if (!x->cu1) break;
+        if (fmt == 16 || fmt == 17 || fmt == 20) {
+            if (g_offMask & 524288) break;
+            x->usedCop1 = true;
+            if (emit_fpu(x, op, i, inDelay)) return;
+            break;
+        }
+        if (fmt == 2) {  // CFC1: FCR0 (implementation 0x0A), FCR31, or 0
+            x->usedCop1 = true;
+            if (!rt) return;
+            if (rd == 31) ldr_imm(e, R0, R11, OFF_FCR31);
+            else load_const(e, R0, rd == 0 ? 0x00000A00u : 0);
+            st32(e, rt, R0, R1);
+            return;
+        }
+        if (fmt == 6) {  // CTC1 to FCR31: the interpreter's when a Cause bit is enabled (or E: it traps at once)
+            x->usedCop1 = true;
+            if (rd != 31) return;
+            u32 slow[1];
+            ldg(e, R0, rt, 0);
+            load_const(e, R1, 0x0183FFFFu);
+            dp_reg(e, AND, 0, R0, R0, R1);
+            mov_shift(e, 0, R1, R0, LSR, 7);
+            dp_imm(e, AND, 0, R1, R1, 31);
+            dp_imm(e, ORR, 0, R1, R1, 32);              // enables, and E always
+            mov_shift(e, 0, R2, R0, LSR, 12);
+            dp_reg(e, TST, 1, 0, R1, R2);               // (Cause & 63) & enables: only the low six bits of R2 meet R1
+            slow[0] = branch_c(e, C_NE, 0);
+            str_imm(e, R0, R11, OFF_FCR31);
+            slow_path(x, op, i, inDelay, slow, 1);
+            return;
+        }
+        if (fmt != 0 && fmt != 1 && fmt != 4 && fmt != 5) break;
         x->usedCop1 = true;
         switch (fmt) {
         case 0:  // MFC1
@@ -655,7 +999,15 @@ static void emit_branch(Ctx* x, u32 op, u32 i, u32 slotOp) {
     else if (prim == 0) { dynamic = true; always = true; link = rd; }                   // JALR
     else if (prim == 2) { always = true; target = jtarget; }                            // J
     else if (prim == 3) { always = true; target = jtarget; link = 31; }                 // JAL
-    else if (prim == 1) {                                                                // REGIMM
+    else if (prim == 0x11) {                                                             // BC1F / T / FL / TL
+        ldr_imm(e, R1, R11, OFF_FCR31);
+        u32 enc = 0;
+        arm_imm(0x00800000u, &enc);
+        dp_imm(e, TST, 1, 0, R1, enc);
+        cond = ((op >> 16) & 1) ? C_NE : C_EQ;
+        likely = ((op >> 17) & 1) != 0;
+        x->usedCop1 = true;  // compiled for CU1 set
+    } else if (prim == 1) {                                                              // REGIMM
         ldg(e, R1, rs, 1);
         dp_imm(e, CMP, 1, 0, R1, 0);
         cond = (rt & 1) ? C_GE : C_LT;
@@ -725,8 +1077,9 @@ static Block* compile(const Vr* c, u32 va, u32 pa) {
         if (pa + 4 * i + 4 > g_mem.rdramSize) break;
         u32 op = m_r32(g_mem.rdram, pa + 4 * i);
         if (is_branch(op)) {
-            // BC1 needs the coprocessor-usable check; a branch in a delay slot is undefined: interpreter for both
-            bool ok = (op >> 26) != 0x11 && i + 1 < room && pa + 4 * i + 8 <= g_mem.rdramSize &&
+            // BC1 with CU1 clear raises CpU (interpreter); a branch in a delay slot is undefined: interpreter for both
+            bool bc1Ok = (c->cop0[C0_STATUS] & ST_CU1) && !(g_offMask & 1048576);
+            bool ok = ((op >> 26) != 0x11 || bc1Ok) && i + 1 < room && pa + 4 * i + 8 <= g_mem.rdramSize &&
                       !is_branch(m_r32(g_mem.rdram, pa + 4 * i + 4));
             if (ok) { br = i; n = i + 2; }
             break;
@@ -791,12 +1144,14 @@ static inline bool kernel_mode(const Vr* c) {
 void jit_run(Vr* c, u64 untilCycles) {
     g_vrRunUntil = untilCycles;
     while (c->cycles < g_vrRunUntil && !g_cpuStop) {
+        g_phase = PH_DISPATCH;
         u32 a = (u32)c->pc;
         u32 pa = a & 0x1FFFFFFF;
         bool ok = !g_vrIrqPending && !c->nextInDelay && !c->branchPending && c->pc == SEXT32(a) && !(a & 3) &&
                   kernel_mode(c);
         if (ok && (a >> 30) != 2) ok = vr_probe_fetch(c, c->pc, &pa);  // TLB-mapped code (GoldenEye's at 0x7F...)
         if (!ok || pa >= g_mem.rdramSize) {
+            g_phase = PH_INTERP;
             vr_step(c);
             g_jitStats.steps++;
             continue;
@@ -820,6 +1175,7 @@ void jit_run(Vr* c, u64 untilCycles) {
         }
         if (!b) {
             if (g_vrRunUntil - c->cycles < MAX_INSNS) {  // near an event: step rather than compile a fragment
+                g_phase = PH_INTERP;
                 vr_step(c);
                 g_jitStats.steps++;
                 continue;
@@ -828,11 +1184,14 @@ void jit_run(Vr* c, u64 untilCycles) {
             if (page) page[(pa & 0xFFF) >> 2] = b;
         }
         if (!b->code || c->cycles + b->n > g_vrRunUntil) {
+            g_phase = PH_INTERP;
             vr_step(c);
             g_jitStats.steps++;
             continue;
         }
         g_jitStats.entries++;
+        g_phaseVa = a;
+        g_phase = PH_BLOCK;
         b->code(c);
     }
 }

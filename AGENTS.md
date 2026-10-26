@@ -32,7 +32,7 @@ its 3DS knowledge; gc3ds's `docs/FINDINGS.md`, `docs/research/` and `AGENTS.md` 
 | `core/src/rsp/` | RSP interpreter: scalar unit (`rsp.c`), vector unit and vector loads / stores (`rsp_vu.c`) |
 | `core/src/rdp/` | RDP command stream (`rdp.c`), the software renderer into RDRAM (`rdp_soft.c`, state shared through `rdp.h`), the combiner as PICA TEV stages (`cc_pica.c`) and its checker (`cc_check.c`) |
 | `core/src/hle/` | high-level graphics microcode (`gfx.c`: F3D, F3DEX, F3DEX2 / F3DZEX and variants) and its per-task comparison with the interpreter (`compare.c`) |
-| `core/host3ds/` | the 3DS program: menu, display, relay client (from gc3ds), JIT host services, the RDP on the PICA200 (`rdp_pica.c`, `n64pass.v.pica`) |
+| `core/host3ds/` | the 3DS program: menu, display, relay client (from gc3ds), JIT host services, the RDP on the PICA200 (`rdp_pica.c`, `n64pass.v.pica`), graphics on core 2 (`hle_worker.c`), a sampling profiler (`profile.c`, `--profile on`) |
 | `core/tools/` | `arm_build.sh` / `jit_check.sh` (the JIT under qemu-arm), `peterlemon.py` (hardware-captured test ROMs), `contact.py` |
 | `tools/relay.sh` | remote 2DS runs (`@n643ds` jobs) |
 | `core/src/host/pc_main.c` | PC frontend: headless runs, ISViewer text, VI pictures as PPM, statistics |

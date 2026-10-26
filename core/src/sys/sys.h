@@ -161,3 +161,9 @@ extern u64 g_rdpTriLogOm[16][2];
 u64 host_ticks(void);
 extern u64 g_hostTicksPerSec;
 extern u64 g_timeRsp, g_timeRdp;  // host ticks in the RSP interpreter (RDP included) and in the RDP
+
+// What the emulator is doing, for a sampling profiler (core/host3ds/profile.c): a store at each transition, and the
+// guest address of the compiled block running.
+enum { PH_OTHER, PH_DISPATCH, PH_BLOCK, PH_INTERP, PH_HLE, PH_GPU, PH_N };
+extern volatile u8 g_phase;
+extern volatile u32 g_phaseVa;

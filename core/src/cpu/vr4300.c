@@ -701,7 +701,14 @@ static void exec(Vr* c, u32 op) {
 // must end after this instruction, with pc / npc set for the dispatcher: an exception, a COP0 instruction (it may
 // change the mode or enable an interrupt), compiled code overwritten, or the scheduler's limit now inside the rest of
 // the block (`remaining` instructions). In a delay slot only an exception ends it: the block ends after the slot.
-int vr_jit_fallback(Vr* c, u32 op, u32 remaining, u32 inDelay) {
+static int jit_fallback(Vr* c, u32 op, u32 remaining, u32 inDelay);
+int vr_jit_fallback(Vr* c, u32 op, u32 remaining, u32 inDelay) {  // (the profiler's phase around it)
+    g_phase = PH_INTERP;
+    int r = jit_fallback(c, op, remaining, inDelay);
+    g_phase = PH_BLOCK;
+    return r;
+}
+static int jit_fallback(Vr* c, u32 op, u32 remaining, u32 inDelay) {
     c->inDelay = inDelay != 0;
     c->nextInDelay = false;
     c->excTaken = false;
